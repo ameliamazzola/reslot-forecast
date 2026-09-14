@@ -1,0 +1,48 @@
+# Every knob that changes a result lives here, not in code.
+seed: 42
+
+data:
+  # Swap source between "synthetic" and "cd_extract" -- nothing downstream changes.
+  source: synthetic
+  onetrack_path: data/raw/1004WMS_ONETRACK_260910132159.xlsx
+  onetrack_expect_date: "2026-09-10"   # from the filename stamp; warns on mismatch
+  demand_path: data/raw/cd_order_lines.parquet
+
+synthetic:
+  n_items: 300
+  days: 730
+  start: "2024-01-01"
+  peak_multiplier: 2.5      # sweep: 1.5 / 2.0 / 2.5 / 3.0
+  n_peaks: 12
+  peak_width_days: 4
+  weekly_amplitude: 0.35
+  annual_amplitude: 0.20
+  noise_cv: 0.25
+  churn_events: 15          # sweep this hardest -- the gain lives in churn
+
+panel:
+  include_cancelled: true   # shorts and cancels are demand
+  freq: D
+
+forecast:
+  model: sarima             # seasonal_naive | moving_average | croston | sarima
+  horizon_days: 14
+  sarima:
+    order: [1, 0, 1]
+    seasonal_order: [1, 0, 1, 7]
+    min_obs: 60
+
+regimes:
+  peak_threshold: 1.30      # ratio to trailing mean
+  valley_threshold: 0.80
+  trailing_window: 28
+
+backtest:
+  n_splits: 6
+  step_days: 14
+  tolerance_days: 1         # for peak/valley hit rate
+
+paths:
+  interim: data/interim
+  processed: data/processed
+  runs: runs

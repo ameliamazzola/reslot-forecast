@@ -1,0 +1,13 @@
+# Raw C&D data NEVER enters the repo. Restricted Drive folder only.
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+runs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
