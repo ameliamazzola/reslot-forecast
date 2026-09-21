@@ -64,3 +64,12 @@ def test_missing_column_raises_when_strict():
 def test_location_parse(code, aisle, bay):
     got = parse_location(code)
     assert got["aisle"] == aisle and got["bay"] == bay
+
+
+def test_non_strict_fills_missing_float_and_datetime():
+    """strict=False must null-fill every dtype, not just the nullable ones.
+    Regression: a bare pd.NA could not be cast to float64."""
+    from reslot.schemas import EVENTS
+    df = pd.DataFrame({"event_id": [1], "ts": [pd.Timestamp("2026-09-01")]})
+    out = validate(df, EVENTS, "events", strict=False)
+    assert out["qty_eaches"].isna().all() and out["qty_eaches"].dtype == "float64"

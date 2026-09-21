@@ -8,11 +8,13 @@ schemas. Nothing downstream ever sees a raw WMS column name. That means:
   * When the real extract lands, the only file that changes is the loader.
   * A schema mismatch fails loudly at ingest, not silently three steps later.
 
-Three tables:
+Tables:
 
-  EVENTS        what the warehouse DID   (OneTrack / movement log)
+  EVENTS        what the warehouse DID   (OneTrack / movement log, WMS pick report)
   DEMAND_LINES  what customers ASKED FOR (order header + line, not yet received)
   ITEM_MASTER   static SKU attributes    (needed for UOM conversion)
+  SLOTS         every storage location   (WMS location master)
+  TRIP_LEGS     consecutive pick pairs   (the travel model's fitting unit)
 """
 
 from __future__ import annotations
@@ -92,8 +94,57 @@ PANEL = {
 }
 
 
+# --------------------------------------------------------------------------
+# SLOTS -- canonical form of the WMS location master
+# --------------------------------------------------------------------------
+# One row per storage location in the building, whether or not it saw
+# activity. Locations with no transactions are the free capacity re-slotting
+# moves into, so the slot model must be built from THIS table, never from
+# locations observed in events.
+#
+# C&D's WMS populates no x/y/z. `path` is WORK_PATH: the sequence the WMS
+# routes pickers through. It is ORDINAL -- it orders slots, it does not
+# measure feet between them. Validated as a travel coordinate; see
+# docs/decisions.md.
+SLOTS = {
+    "location": "string",
+    "slot_type": "string",        # F = pick face, R = reserve rack (master TYPE)
+    "zone": "string",             # WORK_ZONE
+    "path": "float64",            # WORK_PATH
+    "putaway_zone": "string",
+    "putaway_path": "float64",
+    "aisle": "string",            # parsed from the code, see io/onetrack.parse_location
+    "capacity": "float64",        # STD_CPCT
+    "pick_uom": "string",
+}
+
+# --------------------------------------------------------------------------
+# TRIP_LEGS -- consecutive pick pairs within one operator's work on one order
+# --------------------------------------------------------------------------
+# elapsed_s is time between pick SCANS, not a time study. It contains
+# scanning, pallet building and any pause the operator took. Anything fitted
+# on it carries source="scan_interval_proxy", same convention as the panel's
+# "pick_proxy".
+TRIP_LEGS = {
+    "trip_id": "int64",
+    "ts": "datetime64[ns]",
+    "from_loc": "string",
+    "delta_path": "float64",
+    "cross_aisle": "int64",
+    "qty": "float64",
+    "elapsed_s": "float64",
+}
+
 class SchemaError(ValueError):
     pass
+
+
+def _null_for(dtype: str):
+    if dtype.startswith("float"):
+        return float("nan")
+    if dtype.startswith("datetime"):
+        return pd.NaT
+    return pd.NA
 
 
 def validate(df: pd.DataFrame, schema: dict, name: str, strict: bool = True) -> pd.DataFrame:
@@ -109,7 +160,10 @@ def validate(df: pd.DataFrame, schema: dict, name: str, strict: bool = True) -> 
 
     out = df.copy()
     for col in missing:
-        out[col] = pd.NA
+        # Null of the right kind for the target dtype. A bare pd.NA cannot be
+        # cast to float64 or datetime64, which broke strict=False for any
+        # source missing a float column (e.g. qty_eaches on the WMS pick report).
+        out[col] = _null_for(schema[col])
 
     extra = [c for c in out.columns if c not in schema]
     if extra:

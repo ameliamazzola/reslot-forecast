@@ -1,0 +1,36 @@
+# Travel-cost calibration. Every knob that changes a result lives here.
+seed: 20260914
+
+data:
+  # Extracts live in data/raw/ (gitignored). CSV or parquet both work.
+  picks_path: data/raw/yowmspd2_picks_past_30days_ranon9.14.26.csv
+  locations_path: data/raw/yowmspd2_locations_9.14.26.csv
+  ts_format: "%m/%d/%Y %I:%M:%S %p"
+
+scope:
+  zone: WZPCK        # case-pick face
+  uom: CS
+  slot_type: F       # master TYPE: F = pick face, R = reserve rack
+
+trip:
+  group_keys: [order_id, user_id]   # one operator working one order
+  min_picks: 3
+
+legs:
+  min_seconds: 1
+  max_seconds: 900       # above this the operator was not picking
+  max_delta_path: 14000  # full WORK_PATH span of the pick zone
+
+fit:
+  n_bins: 40
+  isotonic_residual: true
+
+validation:
+  holdout_fraction: 0.25
+
+output:
+  cost_table_step: 50
+
+paths:
+  processed: data/processed/travel
+  runs: runs
