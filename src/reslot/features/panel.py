@@ -13,6 +13,8 @@ Two sources, and the difference between them is the point:
 
 from __future__ import annotations
 
+import warnings
+
 import pandas as pd
 
 from ..schemas import PANEL, validate
@@ -52,6 +54,14 @@ def from_demand(
 def from_pick_proxy(events: pd.DataFrame, eaches_per_case=None) -> pd.DataFrame:
     """Interim panel from pick events. See module docstring for the caveat."""
     p = events[events["event_class"] == "pick"].copy()
+    if len(p) and p["qty_eaches"].isna().all():
+        # The WMS pick report has no FROM_EACH. Summing all-null gives 0, so
+        # every qty column below would read zero and anything built on
+        # qty_eaches (intermittency, ABC) would be silently wrong.
+        warnings.warn(
+            "qty_eaches is null for every pick in this source; panel qty "
+            "columns will be 0. Use n_lines (pick count), e.g. "
+            "intermittency(panel, value_col='n_lines').", stacklevel=2)
     p["date"] = p["ts"].dt.normalize()
     g = (p.groupby(["item_id", "date"])
            .agg(qty_eaches=("qty_eaches", "sum"),
@@ -97,10 +107,14 @@ def abc_classify(panel: pd.DataFrame, window_days: int | None = None) -> pd.Data
     return cls.rename("abc_class").reset_index()
 
 
-def intermittency(panel: pd.DataFrame) -> pd.DataFrame:
-    """Zero-day share per item. >0.7 means Croston/TSB territory, not SARIMA."""
+def intermittency(panel: pd.DataFrame, value_col: str = "qty_eaches") -> pd.DataFrame:
+    """Zero-day share per item. >0.7 means Croston/TSB territory, not SARIMA.
+
+    value_col="n_lines" for sources with no eaches (the WMS pick report).
+    """
     d = densify(panel)
-    return (d.assign(zero=d["qty_eaches"] == 0)
+    v = d[value_col].astype("float64")
+    return (d.assign(zero=v == 0, val=v)
              .groupby("item_id")
-             .agg(zero_share=("zero", "mean"), mean_qty=("qty_eaches", "mean"))
+             .agg(zero_share=("zero", "mean"), mean_qty=("val", "mean"))
              .reset_index())

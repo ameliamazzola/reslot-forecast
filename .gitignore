@@ -1,4 +1,5 @@
 # Raw C&D data NEVER enters the repo. Restricted Drive folder only.
+# data/processed/ is ignored too: everything in it is derived from C&D data.
 data/raw/*
 !data/raw/.gitkeep
 data/interim/*
@@ -11,3 +12,10 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .venv/
+
+# Belt and braces: C&D extracts by name, wherever they end up.
+yowmspd2_*
+*ONETRACK*
+
+# Snapshots and archives (e.g. repo_snapshot.zip from git archive)
+*.zip
