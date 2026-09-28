@@ -88,3 +88,61 @@ rule as the rest of `data/processed/`.
 
 **Reverses if.** C&D confirms aggregates are fine to commit. Then commit the
 cost table as the fixed sim↔data interface.
+
+---
+
+## 2026-09-28 — Metric travel network from the layout drawing
+
+**Decision.** Build travel geometry from the York DC layout drawing: forklift
+paths and stop points drawn on dedicated layers, turned into a graph and a
+stop-to-stop distance table in feet (`travel/network.py`). This is the
+"reverses if" of the WORK_PATH entry above, for geometry: WORK_PATH stays the
+calibration history until the fit is rerun on network feet.
+
+**Why.** WORK_PATH is ordinal. It can't say how far two slots are apart, so it
+can't price a re-slot or tell a golden zone from a far one.
+
+**How it's built.** Lines connect only where they share an endpoint or a stop
+circle; crossings are not auto-joined, so every turn is drawn explicitly.
+Hand-traced routes match the table (placeholder→FF bays 1–4 133.7 ft, →FF
+charger end 705.3 ft, FF→GG across either cross-aisle 41.1 ft).
+
+**Reverses if.** A site walk finds a drawn path that trucks can't use, or an
+opening that isn't drawn.
+
+---
+
+## 2026-09-28 — Location → stop rule (crosswalk)
+
+**Decision.** Map each WMS location to a drawn stop by rule
+(`travel/crosswalk.py`, anchors in `configs/travel.yaml`): aisle code → path x
+(FF rightmost), bay 1 at the dock, 4 bays per stop (one pallet per bay, odd
+east / even west), each third of the aisle anchored to its own drawn y.
+Tunnel bays 79–84 and 185–190 (upper levels only) map to the cross-aisle
+junction under them. Level doesn't change the stop.
+
+**Why.** No coordinates in the WMS. Evidence the rule holds: all 30 drawn
+column rack sections land exactly on bay numbers the WMS skips; no stop gets
+more than 4 floor locations; floor spot-check by Anthony agreed.
+
+**Scope.** Case picking on FF–QQ. 97.1% of CS picks in the 30-day report map to
+a stop (64,763 / 66,699); the rest are RR, ZZ, LP, W — not drawn. Reserve
+pallet pulls (single-letter aisles, double-deep) are out of scope.
+
+**Reverses if.** A spot-check disagrees, or the analyst's location-code
+definitions contradict the side/level reading.
+
+---
+
+## 2026-09-28 — Trip start/drop-off is a placeholder
+
+**Decision.** One placeholder node (`PD_Placeholder` layer) on a 35 ft spur
+off the top cross-aisle, between LL and KK, until staging-destination data
+arrives. `network.pd_mode: placeholder` is written to every manifest.
+
+**Why.** `TO_LOCATION` on case picks is the picker's equipment (V-xxxx), not a
+floor location, so the transactions can't say where pallets go.
+
+**Consequence.** Pick-to-pick legs are unaffected. Trip totals that include the
+first/last leg are not citable until `pd_mode: real`. Run a sensitivity check
+across candidate drop-off points before reporting any policy ranking.
