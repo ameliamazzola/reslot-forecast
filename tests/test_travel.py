@@ -17,6 +17,8 @@ from reslot.io.locations import load_locations, reconcile, slot_inventory
 from reslot.io.wms_picks import load_wms_picks
 from reslot.schemas import EVENTS, SLOTS, validate
 from reslot.travel import calibrate as T
+from reslot.travel import crosswalk as X
+from reslot.travel import network as N
 
 CFG = {
     "trip": {"group_keys": ["order_id", "user_id"], "min_picks": 3},
@@ -240,3 +242,123 @@ def test_pick_proxy_warns_when_no_eaches(raw_picks_csv):
     with pytest.warns(UserWarning, match="qty_eaches is null"):
         p = P.from_pick_proxy(ev)
     assert (P.intermittency(p, value_col="n_lines")["zero_share"] < 1.0).all()
+
+
+# --------------------------------------------------------------------------
+# Network (synthetic layout -- no drawing needed)
+# --------------------------------------------------------------------------
+# Two aisles 236" apart, cross-aisles top and bottom, one rack stop mid-aisle
+# on each. Same geometry style as the York drawing, small enough to check by hand.
+
+def tiny_layout():
+    lines = [((0, 0), (0, 1000), "path_aisle"), ((236, 0), (236, 1000), "path_aisle"),
+             ((0, 1000), (236, 1000), "path_cross"), ((0, 0), (236, 0), "path_cross")]
+    circles = [(0, 1000, "junction"), (236, 1000, "junction"), (0, 0, "junction"),
+               (236, 0, "junction"), (0, 500, "rack"), (236, 500, "rack")]
+    return lines, circles
+
+
+def test_network_distances_by_hand():
+    G, stops = N.build_graph(*tiny_layout())
+    D = N.distance_matrix_ft(G, stops)
+    # rack to rack: up 500, across 236, down 500 (either way round)
+    assert D.loc["S_0.0_500.0", "S_236.0_500.0"] == pytest.approx((500 + 236 + 500) / 12, abs=0.01)
+    assert (D.values == D.values.T).all() and (D.values.diagonal() == 0).all()
+
+
+def test_circle_mid_line_becomes_node():
+    """Stops are drawn as circles ON a continuous aisle line; the builder must
+    split the line there or the stop is unreachable."""
+    G, stops = N.build_graph(*tiny_layout())
+    assert stops["on_path"].all()
+    assert N.network_checks(G, stops)["connected"]
+
+
+def test_crossing_without_shared_point_is_not_a_junction():
+    """Lines that merely cross are NOT joined -- a truck can only turn where the
+    drawing says so. If someone adds auto-intersection, this fails on purpose:
+    it would silently connect things that are not connected (e.g. across a
+    rack end with no opening)."""
+    lines = [((0, 0), (0, 100), "path_aisle"), ((-50, 50), (50, 50), "path_cross")]
+    G, _ = N.build_graph(lines, [])
+    import networkx as nx
+    assert nx.number_connected_components(G) == 2
+
+
+def test_checks_flag_junction_without_circle():
+    lines, circles = tiny_layout()
+    lines = lines + [((118, 1000), (118, 1300), "path_aisle")]   # spur off the top, no circle
+    G, stops = N.build_graph(lines, circles + [(118, 1300, "pd")])
+    c = N.network_checks(G, stops)
+    assert c["junctions_without_circle"] == ["118.0,1000.0"]
+    assert "pd@118.0,1300.0" in c["dead_ends"]
+
+
+# --------------------------------------------------------------------------
+# Crosswalk rules
+# --------------------------------------------------------------------------
+
+import yaml as _yaml
+
+XCFG = _yaml.safe_load((Path(__file__).resolve().parents[1] / "configs" / "travel.yaml")
+                       .read_text())["crosswalk"]
+R = XCFG["bay_rules"]
+
+
+def ty(b):
+    return X.target_y(b, R["segments"], R["pitch_in"], R["bays_per_stop"])
+
+
+def test_four_bays_per_stop_from_the_dock():
+    """Bays 1-4 share the first stop at the top; 5 starts the next section."""
+    assert ty(1)[1] == ty(4)[1] == R["segments"][0]["first_y"]
+    assert ty(5)[1] == pytest.approx(ty(1)[1] - R["pitch_in"])
+
+
+def test_tunnel_bays_map_to_cross_aisle_junction():
+    """79-84 and 185-190 exist only above the cross-aisles; the truck works them
+    from the junction underneath, and they must not step down the aisle."""
+    for b in (79, 84, 185, 190):
+        seg, y, node = ty(b)
+        assert seg.startswith("tunnel") and node == "junction"
+    assert ty(79)[1] == ty(84)[1]
+
+
+def test_segments_are_anchored_not_counted():
+    """Each third restarts at its own anchor, so a counting error in one third
+    cannot shift the next."""
+    assert ty(85)[1] == [s for s in R["segments"] if s["name"] == "middle"][0]["first_y"]
+    assert ty(191)[1] == [s for s in R["segments"] if s["name"] == "bottom"][0]["first_y"]
+
+
+def test_segments_cover_every_bay_once():
+    covered = [b for s in R["segments"] for b in range(s["first_bay"], s["last_bay"] + 1)]
+    assert sorted(covered) == list(range(1, R["max_bay"] + 1))
+
+
+# --------------------------------------------------------------------------
+# Real outputs -- skipped unless scripts/build_travel_network.py has been run
+# --------------------------------------------------------------------------
+
+PROC = Path(__file__).resolve().parents[1] / "data" / "processed" / "travel"
+needs_outputs = pytest.mark.skipif(not (PROC / "stop_distance_ft.csv").exists(),
+                                   reason="run scripts/build_travel_network.py first (needs C&D data)")
+
+
+@needs_outputs
+@pytest.mark.parametrize("a,b,feet", [
+    ("PD_179811.5_6131.4", "S_180855.6_5571.4", 133.7),   # placeholder -> FF bays 1-4
+    ("PD_179811.5_6131.4", "S_180855.6_-1287.6", 705.3),  # placeholder -> FF charger end
+    ("S_180855.6_926.4", "S_180619.6_926.4", 41.1),       # FF -> GG via middle cross-aisle
+    ("S_180855.6_3398.4", "S_180619.6_3398.4", 41.1),     # FF -> GG via upper cross-aisle
+])
+def test_real_routes_match_hand_calcs(a, b, feet):
+    """Hand-traced on the drawing. If one moves, the drawing or the builder changed."""
+    D = pd.read_csv(PROC / "stop_distance_ft.csv", index_col=0)
+    assert D.loc[a, b] == pytest.approx(feet, abs=0.1)
+
+
+@needs_outputs
+def test_real_crosswalk_never_overloads_a_stop():
+    xw = pd.read_csv(PROC / "location_stop_crosswalk.csv", dtype={"level": str})
+    assert X.floor_load(xw)["max_floor_locations_per_stop"] <= R["bays_per_stop"]
