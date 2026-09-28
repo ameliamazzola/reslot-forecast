@@ -5,6 +5,7 @@ data:
   # Extracts live in data/raw/ (gitignored). CSV or parquet both work.
   picks_path: data/raw/yowmspd2_picks_past_30days_ranon9.14.26.csv
   locations_path: data/raw/yowmspd2_locations_9.14.26.csv
+  layout_path: data/raw/DC_Layout_Paths_5.dxf   # York DC drawing with path/stop layers
   ts_format: "%m/%d/%Y %I:%M:%S %p"
 
 scope:
@@ -34,3 +35,43 @@ output:
 paths:
   processed: data/processed/travel
   runs: runs
+
+# --------------------------------------------------------------------------
+# Travel network from the layout drawing (scripts/build_travel_network.py)
+# Units: drawing inches, AutoCAD World coordinates. See docs/data-notes.md.
+# --------------------------------------------------------------------------
+network:
+  layers:
+    paths: [Path_Aisle, Path_Cross]
+    stops: {Stop_Rack: rack, Stop_Junction: junction, PD_Placeholder: pd}
+    columns: -ST_R_SD_COL        # rack sections with a building column (checks only)
+  snap_tol_in: 0.5               # float noise only; the drawing is exact
+  pd_mode: placeholder           # placeholder | real -- flip when staging data lands
+
+crosswalk:
+  # Aisle code -> x of its drawn path. FF is the rightmost (east) aisle.
+  aisle_x:
+    FF: 180855.63
+    GG: 180619.63
+    HH: 180383.63
+    JJ: 180147.63
+    KK: 179911.63
+    LL: 179675.63
+    MM: 179433.63
+    NN: 179197.63
+    PP: [178961.63, 178997.5]    # path jogs east below y=205.9
+    QQ: 178725.63
+  bay_rules:
+    odd_side: east
+    bays_per_stop: 4             # one pallet per bay, 2 per side per 103" section
+    pitch_in: 103.0
+    max_bay: 270
+    snap_tol_in: 24              # PP207 sits 20" off its stop (west racks offset)
+    # Bay 1 at the dock (top, high y). Each segment is anchored to a drawn y.
+    segments:
+      - {name: top,           first_bay: 1,   last_bay: 76,  first_y: 5571.41, node: rack}
+      - {name: half_section,  first_bay: 77,  last_bay: 78,  first_y: 3634.91, node: rack}
+      - {name: tunnel_upper,  first_bay: 79,  last_bay: 84,  first_y: 3526.91, node: junction, stepped: false}
+      - {name: middle,        first_bay: 85,  last_bay: 184, first_y: 3398.41, node: rack}
+      - {name: tunnel_middle, first_bay: 185, last_bay: 190, first_y: 797.91,  node: junction, stepped: false}
+      - {name: bottom,        first_bay: 191, last_bay: 270, first_y: 669.41,  node: rack}
