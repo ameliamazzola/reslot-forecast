@@ -19,3 +19,9 @@ yowmspd2_*
 
 # Snapshots and archives (e.g. repo_snapshot.zip from git archive)
 *.zip
+
+# C&D layout drawings (blueprint from the York DC)
+*.dxf
+*.dwg
+*.bak
+DC_Layout_*
