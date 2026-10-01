@@ -85,3 +85,31 @@ Target schema: `schemas.DEMAND_LINES`. What defines the ask:
 Run `scripts/validate_extract.py` against the 5-row sample before the full pull.
 `quality_report()` checks each answer we were given: are cancels retained, is
 order_received_ts genuinely distinct from ship date, how many months landed.
+
+## York DC layout drawing (received from site engineering)
+
+AutoCAD drawing, exported to DXF for processing (`DC_Layout_Paths_5.dxf`,
+~240 MB). Lives in `data/raw/` only — it is C&D's blueprint.
+
+- **Units and frame.** Inches, AutoCAD World coordinates. AutoCAD may display
+  feet-inches (Architectural units); the stored values are inches.
+- **Orientation.** Dock at the top (high y), chargers at the bottom. Pick aisles
+  run vertically (along y). FF is the rightmost aisle at x = 180855.63; aisles
+  are 236" apart, rack sections 103".
+- **Layers added by us.** `Path_Aisle`, `Path_Cross` (lines), `Stop_Rack`,
+  `Stop_Junction`, `PD_Placeholder` (3" circles). Exported names carry a leading
+  apostrophe; the loader strips it.
+- **Cross-aisles are tunnels.** Top (y 5710), upper third (y 3527, the bowtie
+  sections), middle (y 798), bottom (y −1410). Bays 79–84 and 185–190 exist only
+  at levels D/E, over the upper and middle cross-aisles.
+- **Columns.** Layer `-ST_R_SD_COL`; 30 rack sections with a building column,
+  every ~612". The WMS skips one bay number at each (e.g. GG odd 17, 41, 65…).
+- **Location code, now confirmed with the site.** `GG184A` = aisle `GG`, bay
+  `184`, level `A`. One pallet per bay. Odd bays east face, even west. Level A
+  is floor (pick face), B–F reserve above. Bay 1 at the dock end.
+- **Zones on the racks.** Household aisles A–Y, personal care Z–QQ, GG/HH for
+  partial pallets. Putaway zone codes like `PZHHB`: `PZ` short pallet / `PY`
+  tall, `HH` household, last letter front/middle/back section. These are
+  re-slotting constraints (product family, pallet height).
+- **Not drawn.** RR, ZZ (multi-level case pick), W, the double-deep reserve area
+  east of FF, staging lanes (along the top, y ≈ 5830–6310).

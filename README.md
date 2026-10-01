@@ -33,12 +33,15 @@ src/reslot/
   forecast/sarima.py        SARIMAX per item, with fallback for sparse SKUs
   forecast/evaluate.py      rolling-origin backtest, accuracy + decision metrics
   travel/calibrate.py       travel-time model fitted from observed pick intervals
+  travel/network.py         layout drawing -> path graph, stop distance table (feet)
+  travel/crosswalk.py       WMS location -> drawn stop, by rule
   utils/manifest.py         git SHA + config hash + seed on every run
 scripts/
   ingest_onetrack.py        normalise the movement export
   validate_extract.py       run against the 5-row C&D sample FIRST
   run_forecast.py           panel -> backtest all models -> results + manifest
   calibrate_travel.py       fit travel model -> cost table for the sim + manifest
+  build_travel_network.py   DXF + location master -> stops, distances, crosswalk + manifest
 configs/travel.yaml         travel calibration knobs
 docs/decisions.md           append-only decision log
 ```
@@ -50,6 +53,7 @@ pip install -r requirements.txt
 python scripts/ingest_onetrack.py            # against the real export
 python scripts/run_forecast.py               # synthetic end-to-end
 python scripts/calibrate_travel.py           # needs the two yowmspd2 CSVs in data/raw/
+python scripts/build_travel_network.py       # also needs the layout DXF in data/raw/
 pytest -q
 ```
 
