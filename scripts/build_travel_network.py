@@ -36,7 +36,8 @@ d, net, sc = cfg["data"], cfg["network"], cfg["scope"]
 print(f"reading {d['layout_path']} (a few minutes)...")
 layout = N.read_layout(d["layout_path"], net["layers"])
 G, stops = N.build_graph(layout["lines"], layout["circles"], net["snap_tol_in"])
-checks = N.network_checks(G, stops)
+orphans = N.prune_orphan_fragments(G)
+checks = N.network_checks(G, stops, orphans, layout["misfiled"])
 if not checks["connected"] or checks["circles_off_path"] or checks["duplicate_stop_ids"]:
     raise SystemExit(f"network failed checks, fix the drawing first: {checks}")
 dist = N.distance_matrix_ft(G, stops)
@@ -44,6 +45,17 @@ print(f"{len(layout['lines'])} path lines, {len(stops)} stops {checks['stops_by_
       f"connected, dead ends: {checks['dead_ends']}")
 if checks["junctions_without_circle"]:
     print(f"  NOTE junctions without a circle: {checks['junctions_without_circle']}")
+for k, label in [("duplicate_circles_merged", "duplicate circles merged"),
+                 ("orphan_fragments_removed", "stop-less fragments removed"),
+                 ("misfiled_entities_ignored", "misfiled entities IGNORED (fix layer in drawing)"),
+                 ("rack_stops_at_junctions", "rack circles where paths meet")]:
+    v = checks[k]
+    if v:
+        print(f"  NOTE {label}: {v if isinstance(v, int) else len(v)}"
+              + ("" if isinstance(v, int) else f"  e.g. {v[:3]}"))
+if not checks["has_pd"]:
+    print("  WARNING no PD_Placeholder stop in the drawing -- trip start/drop-off missing; "
+          "hand-calc tests that start at PD will fail")
 if net["pd_mode"] == "placeholder":
     print("  NOTE trip start/drop-off is a PLACEHOLDER -- do not cite trip totals")
 
@@ -54,11 +66,18 @@ load = X.floor_load(xw)
 cols = X.column_check(xw, layout["columns"], cfg["crosswalk"])
 events = load_wms_picks(d["picks_path"], d["ts_format"])
 cov = X.pick_coverage(events, xw, sc["zone"], sc["uom"])
+cov_pl = X.pick_coverage(events, xw, "WZGNA", "PL")   # reserve pallet pulls
 print(f"crosswalk: {xw['status'].value_counts().to_dict()}")
 print(f"  max floor locations per stop {load['max_floor_locations_per_stop']}, "
       f"column sections explained {cols['column_sections_explained']}")
 print(f"  {sc['uom']} pick coverage {cov['coverage']:.1%} "
       f"({cov['mapped']:,}/{cov['picks']:,}); unmapped by aisle {cov['top_unmapped_aisles']}")
+print(f"  PL pick coverage {cov_pl['coverage']:.1%} of all, {cov_pl['coverage_rack_coded']:.1%} of "
+      f"rack-coded (rest are production-line / dock pulls, not rack)")
+by_aisle = xw[xw["aisle"].notna()].groupby("aisle")["status"].value_counts().unstack(fill_value=0)
+bad = by_aisle[by_aisle.drop(columns=["ok"], errors="ignore").sum(axis=1) > 0]
+if len(bad):
+    print("  aisles with unmapped or check_snap locations:\n" + bad.to_string())
 
 # --- write -----------------------------------------------------------------
 out = Path(cfg["paths"]["processed"])
@@ -72,5 +91,5 @@ write_manifest(run_dir, cfg, inputs=[d["layout_path"], d["locations_path"], d["p
                extra={"pd_mode": net["pd_mode"], "network": checks,
                       "crosswalk": {"status": xw["status"].value_counts().to_dict(),
                                     **load, **cols},
-                      "pick_coverage": cov})
+                      "pick_coverage": cov, "pick_coverage_pl": cov_pl})
 print(f"\nwrote {out}/ and {run_dir}/manifest.json")

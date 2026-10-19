@@ -5,7 +5,7 @@ data:
   # Extracts live in data/raw/ (gitignored). CSV or parquet both work.
   picks_path: data/raw/yowmspd2_picks_past_30days_ranon9.14.26.csv
   locations_path: data/raw/yowmspd2_locations_9.14.26.csv
-  layout_path: data/raw/DC_Layout_Paths_5.dxf   # York DC drawing with path/stop layers
+  layout_path: data/raw/DC_Layout_Paths_6.dxf   # York DC drawing with path/stop layers (full building)
   ts_format: "%m/%d/%Y %I:%M:%S %p"
 
 scope:
@@ -61,6 +61,38 @@ crosswalk:
     NN: 179197.63
     PP: [178961.63, 178997.5]    # path jogs east below y=205.9
     QQ: 178725.63
+    # East of FF (added with the full-building paths). Letters keep running
+    # east: EE ... AA, then Z ... A (no I or O). Order matched to the WMS bay
+    # structure per aisle (gaps, tunnels, max bay) -- see docs/data-notes.md.
+    EE: 181208.63
+    DD: [181524.63, 181590.13, 181519.88, 181556.63]   # zig-zag path, 154"-360" (assignment DD vs CC to confirm)
+    CC: [181924.63, 181859.13, 181929.38, 181892.63]   # mirror of DD
+    BB: 182240.63
+    AA: 182576.63
+    Z: 182924.63
+    Y: 183260.63                 # drawn only down to the y=1544 cross-aisle
+    X: 183608.63                 # same
+    W: 183944.63
+    V: 184292.63
+    U: 184628.63
+    T: 184976.63
+    S: 185312.63
+    R: 185660.63
+    Q: 185996.63
+    P: [186344.63, 186344.67]    # upper and lower sections drawn 0.04" apart
+    N: 186680.73
+    M: [187028.63, 187029.06]
+    L: [187364.63, 187364.99]
+    K: [187712.63, 187712.26]
+    J: [188048.63, 188048.26]
+    H: [188396.63, 188396.26]
+    G: 188732.63
+    F: 189080.63
+    E: 189416.63
+    D: 189764.63
+    C: 190100.63
+    B: 190448.63
+    A: 190784.63
   bay_rules:
     odd_side: east
     bays_per_stop: 4             # one pallet per bay, 2 per side per 103" section

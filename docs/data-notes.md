@@ -111,5 +111,31 @@ AutoCAD drawing, exported to DXF for processing (`DC_Layout_Paths_5.dxf`,
   partial pallets. Putaway zone codes like `PZHHB`: `PZ` short pallet / `PY`
   tall, `HH` household, last letter front/middle/back section. These are
   re-slotting constraints (product family, pallet height).
-- **Not drawn.** RR, ZZ (multi-level case pick), W, the double-deep reserve area
-  east of FF, staging lanes (along the top, y ≈ 5830–6310).
+- **Full-building paths (Oct 18).** 29 aisle paths added east of FF, x from
+  181208.63 (EE) to 190784.63 (A). Aisle spacing alternates 336"/348" in the
+  double-deep block. Same rack-row y values as FF–QQ (top stop 5571.4, half
+  section 3634.9, middle start 3398.4, bottom start 669.4); cross-aisles at
+  5710.4, 3526.9, 797.9 (gap between M and H), and a bottom cross at −1287.6
+  (−1081.6 from F to A). Extra cross pieces at 1544.4 (under X/Y), 1853.4 and
+  154.4. DD and CC are zig-zag paths (jogs at y 154–360).
+- **Drawing fixes (status after the Oct 18 second pass).**
+  - Done: P bottom stop (186344.63, −1184.59); CC junctions at
+    (181892.6, 3526.9) and (181892.6, 797.9) on `Stop_Junction`; junction
+    circles at (181592.6, −1410.1) and (181856.6, −1410.1); stray stubs
+    across G and F at y ≈ 3604 removed.
+  - Open: the placeholder circle at (180174.4, 6094.1) is on the `Pallet`
+    layer, which also holds a 4 × 11 grid of 44 circles in the staging lanes
+    (x 188230–188380). Move the one circle to `PD_Placeholder`, draw a line
+    straight down to (180174.4, 5710.41), and put a `Stop_Junction` circle
+    there.
+  - Open: X/Y bays 157–184 — site says no racks below the y=1544
+    cross-aisle, yet the WMS has 304 locations (274 occupied, zone WZGNH) and
+    771 picks Sep 15–Oct 15 there. Need to know where those pallets sit
+    (floor-stacked? numbered elsewhere?).
+  - Harmless, handled by the builder: 108 duplicate circles, two 1-inch
+    stubs near (181559.6, −1239) and (181889.6, −1239), 24 duplicate circles
+    on `Path_Cross` at y −1287.6, 2 duplicate DD/CC aisle lines on
+    `Stop_Junction`.
+- **Not drawn.** RR, ZZ (multi-level case pick), non-aisle location families
+  (BW, GB, LS, VA–VN), production lines, staging lanes (along the top,
+  y ≈ 5830–6310).

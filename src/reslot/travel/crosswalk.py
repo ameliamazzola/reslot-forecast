@@ -13,6 +13,13 @@ The WMS has no coordinates, so this is a rule, not a lookup:
     cross-aisle junction underneath.
   * LEVEL does not change the stop. It is carried for lift time later.
 
+The same rule and the same y anchors hold building-wide: every rack row in the
+drawing shares the top / half-section / middle / bottom y values, so the east
+reserve aisles (EE-AA, Z-A) only needed their path x added. Aisles with a big
+gap in bay numbers (J-N, P, Q: no rack over a building feature) have the
+matching gap in their drawn stops -- the strongest check that the aisle order
+is right.
+
 Each segment of an aisle (top third, half section, tunnels, middle and bottom
 thirds) is anchored to a drawn y, so numbering errors cannot accumulate across
 the aisle. Anchors live in configs/travel.yaml.
@@ -130,9 +137,12 @@ def pick_coverage(events: pd.DataFrame, xw: pd.DataFrame, zone: str, uom: str) -
     says whether the drawn area is the right scope."""
     s = events[(events["event_class"] == "pick") & (events["uom"] == uom)]
     ok = set(xw.loc[xw["status"] == "ok", "location"])
+    rack = set(xw.loc[xw["aisle"].notna(), "location"])
     in_zone = s[s["from_zone"] == zone]
+    racked = s[s["from_loc"].isin(rack)]
     return {"uom": uom, "picks": int(len(s)), "mapped": int(s["from_loc"].isin(ok).sum()),
             "coverage": float(s["from_loc"].isin(ok).mean()) if len(s) else 0.0,
             "coverage_in_zone": float(in_zone["from_loc"].isin(ok).mean()) if len(in_zone) else 0.0,
+            "coverage_rack_coded": float(racked["from_loc"].isin(ok).mean()) if len(racked) else 0.0,
             "top_unmapped_aisles": s.loc[~s["from_loc"].isin(ok), "from_loc"]
                                     .str.extract(r"^([A-Z]+)")[0].value_counts().head(8).to_dict()}

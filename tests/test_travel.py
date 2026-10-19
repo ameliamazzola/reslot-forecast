@@ -294,6 +294,31 @@ def test_checks_flag_junction_without_circle():
     assert "pd@118.0,1300.0" in c["dead_ends"]
 
 
+def test_duplicate_circles_are_one_stop():
+    """A circle pasted twice at the same point is one stop, and the count of
+    merged copies is reported (the full-building drawing has 108)."""
+    lines, circles = tiny_layout()
+    G, stops = N.build_graph(lines, circles + [(0, 500, "rack"), (0, 500, "rack")])
+    assert stops["stop_id"].is_unique
+    assert N.network_checks(G, stops)["duplicate_circles_merged"] == 2
+
+
+def test_stopless_fragment_is_pruned_but_stopped_piece_is_not():
+    """A stray 1-inch line can't change any route, so it is dropped and listed.
+    A disconnected piece that carries a stop is a real gap: it stays, and the
+    connectivity check fails."""
+    lines, circles = tiny_layout()
+    stray = [((500, 500), (500, 501), "path_aisle")]
+    G, stops = N.build_graph(lines + stray, circles)
+    removed = N.prune_orphan_fragments(G)
+    assert len(removed) == 1 and N.network_checks(G, stops, removed)["connected"]
+
+    island = [((900, 0), (900, 100), "path_aisle")]
+    G, stops = N.build_graph(lines + island, circles + [(900, 50, "rack")])
+    assert N.prune_orphan_fragments(G) == []
+    assert not N.network_checks(G, stops)["connected"]
+
+
 # --------------------------------------------------------------------------
 # Crosswalk rules
 # --------------------------------------------------------------------------
@@ -347,13 +372,24 @@ needs_outputs = pytest.mark.skipif(not (PROC / "stop_distance_ft.csv").exists(),
 
 @needs_outputs
 @pytest.mark.parametrize("a,b,feet", [
-    ("PD_179811.5_6131.4", "S_180855.6_5571.4", 133.7),   # placeholder -> FF bays 1-4
-    ("PD_179811.5_6131.4", "S_180855.6_-1287.6", 705.3),  # placeholder -> FF charger end
+    ("PD_180174.4_6094.1", "S_180855.6_5571.4", 100.3),   # placeholder -> FF bays 1-4: (384+681+139)/12
+    ("PD_180174.4_6094.1", "S_180855.6_-1287.6", 671.9),  # placeholder -> FF charger end: +571.6
     ("S_180855.6_926.4", "S_180619.6_926.4", 41.1),       # FF -> GG via middle cross-aisle
     ("S_180855.6_3398.4", "S_180619.6_3398.4", 41.1),     # FF -> GG via upper cross-aisle
 ])
 def test_real_routes_match_hand_calcs(a, b, feet):
     """Hand-traced on the drawing. If one moves, the drawing or the builder changed."""
+    D = pd.read_csv(PROC / "stop_distance_ft.csv", index_col=0)
+    assert D.loc[a, b] == pytest.approx(feet, abs=0.1)
+
+
+@needs_outputs
+@pytest.mark.parametrize("a,b,feet", [
+    ("S_181208.6_926.4", "S_180855.6_926.4", 50.8),     # EE -> FF via middle cross-aisle
+    ("S_190784.6_5571.4", "S_180855.6_5571.4", 850.6),  # A top -> FF top, along the dock aisle
+])
+def test_real_east_routes_match_hand_calcs(a, b, feet):
+    """East block, hand-traced: (128.5+353+128.5)/12 and (139+9929+139)/12."""
     D = pd.read_csv(PROC / "stop_distance_ft.csv", index_col=0)
     assert D.loc[a, b] == pytest.approx(feet, abs=0.1)
 
