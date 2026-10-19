@@ -146,3 +146,40 @@ floor location, so the transactions can't say where pallets go.
 **Consequence.** Pick-to-pick legs are unaffected. Trip totals that include the
 first/last leg are not citable until `pd_mode: real`. Run a sensitivity check
 across candidate drop-off points before reporting any policy ranking.
+
+---
+
+## 2026-10-18 — Travel network covers the whole building
+
+**Decision.** Extend the network and crosswalk from FF–QQ to every racked aisle:
+EE, DD, CC, BB, AA and Z–A (no I/O), 29 new paths east of FF. Same location →
+stop rule and the same y anchors as FF–QQ; only `aisle_x` was added.
+
+**Why the aisle order is right.** Letters continue east of FF, and the drawn
+gaps line up with the WMS bay structure aisle by aisle: J, K, L have no bays
+79–214 and their paths have no stops there; M, N, P, Q have no bays 79–148
+and neither do their paths; X and Y stop at bay 184 and their paths are short.
+Every stop still gets at most 4 floor locations, and all 30 column sections
+still land on skipped bays.
+
+**Result.** 2,229 rack stops, 184 junctions, one connected graph. 42,462 rack
+locations map to a stop (was the FF–QQ set only). Reserve pallet pulls: 98.0%
+of rack-coded PL picks map; the other ~16.7k PL picks are off the production
+lines (WZPKG), which aren't racks. CS pick coverage unchanged at 97.2%.
+
+**Builder changes.** (1) Circles drawn twice at the same point are one stop
+(108 merged). (2) Pieces of path with no stop are dropped and listed (two
+1-inch strays) — they can't change a route; a disconnected piece WITH a stop
+still fails the build. (3) Circles on path layers and lines on stop layers are
+ignored and listed, never guessed at. Crossings are still not auto-joined.
+
+**Open in the drawing (blocking citable numbers).** PD_Placeholder and its spur
+are missing from this export; X/Y bays 157–184 have no stops below the y=1544
+cross-aisle; P is missing its bottom stop (bays 263–266); CC's two tunnel
+junctions are on the wrong layer. 342 locations are `check_snap` because of
+these. DD vs CC (the two zig-zag paths) is assigned by order, not yet checked
+on the floor.
+
+**Reverses if.** A floor check finds a letter on the wrong path, or the site
+says the east aisles are numbered from the other end.
+
