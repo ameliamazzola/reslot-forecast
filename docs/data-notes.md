@@ -136,6 +136,18 @@ AutoCAD drawing, exported to DXF for processing (`DC_Layout_Paths_5.dxf`,
     stubs near (181559.6, −1239) and (181889.6, −1239), 24 duplicate circles
     on `Path_Cross` at y −1287.6, 2 duplicate DD/CC aisle lines on
     `Stop_Junction`.
+- **Staging and dispatch (Oct 19 drawing).** 100 `Stop_Lane` circles at
+  y = 5766.6 (56" spurs to the top cross-aisle), x 188380.6 (lane 1, east) to
+  178812.9 (lane 100). Lanes 50" apart in groups of 4; groups 192–225" apart;
+  1,234" office gap between lane 52 and 53. `Stop_Dispatch` at
+  (183183.9, 5933.3) on a 223" spur. 1,100 circles on `Pallet` are pallet
+  positions (reminder only, not read). A leftover `Dock_aisle` line at
+  x 180174.4 (the old placeholder spur) is not read; delete it or say what
+  it is.
+- **PL locations in the master.** PL01–PL57 + PL60 in WZNDK (capacity 44 / 66
+  / 88), PL08A, 13A, 17A, 25A, 35A, 38A, 47A, 50A also WZNDK (inbound), PL101,
+  PL101A/B, PL102A elsewhere. Outbound DROPOFF rows don't record a PL yet --
+  need TO_LOCATION on the export to know which lane a pallet went to.
 - **Not drawn.** RR, ZZ (multi-level case pick), non-aisle location families
   (BW, GB, LS, VA–VN), production lines, staging lanes (along the top,
   y ≈ 5830–6310).

@@ -11,7 +11,9 @@ ignored -- AutoCAD exported them as 'Path_Aisle etc.):
     path_aisle, path_cross   LINE     travel paths (graph edges)
     stop_rack                CIRCLE   where a truck stops at rack; 4 locations each
     stop_junction            CIRCLE   aisle / cross-aisle intersections; no locations
-    pd_placeholder           CIRCLE   PLACEHOLDER trip start / drop-off
+    stop_lane                CIRCLE   outbound staging lane mouth (cross-aisle end); drop-off
+    stop_dispatch            CIRCLE   dispatch board, where trucks pick up jobs; trip start
+    pd_placeholder           CIRCLE   legacy placeholder trip start / drop-off (retired)
     -st_r_sd_col             INSERT   rack sections with a building column (checks only)
 
 Two lines are connected ONLY where they share a point: an endpoint or a stop
@@ -36,7 +38,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
-STOP_PREFIX = {"rack": "S", "junction": "J", "pd": "PD"}
+STOP_PREFIX = {"rack": "S", "junction": "J", "lane": "L", "dispatch": "D", "pd": "PD"}
 
 
 def _norm(layer: str) -> str:
@@ -208,8 +210,12 @@ def network_checks(G: nx.Graph, stops: pd.DataFrame, orphans: list | None = None
         "orphan_fragments_removed": list(orphans or []),
         "misfiled_entities_ignored": list(misfiled or []),
         "has_pd": bool((stops["node_type"] == "pd").any()),
+        "n_dispatch": int((stops["node_type"] == "dispatch").sum()),
+        "n_lane": int((stops["node_type"] == "lane").sum()),
+        # Lane mouths and the dispatch board are drawn as spur ends on purpose.
         "dead_ends": sorted([f"{typed.get(n, 'vertex')}@{n[0]:.1f},{n[1]:.1f}"
-                             for n, d in deg.items() if d == 1]),
+                             for n, d in deg.items()
+                             if d == 1 and typed.get(n) not in ("lane", "dispatch", "pd")]),
         "junctions_without_circle": sorted([f"{n[0]:.1f},{n[1]:.1f}" for n, d in deg.items()
                                             if d >= 3 and n not in typed]),
         "rack_stops_at_junctions": sorted([f"{n[0]:.1f},{n[1]:.1f}" for n, d in deg.items()

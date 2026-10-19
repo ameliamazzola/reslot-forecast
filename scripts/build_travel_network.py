@@ -4,7 +4,7 @@ from the York DC layout drawing.
 Run:  python scripts/build_travel_network.py [configs/travel.yaml]
 
 Reads (data/raw/, gitignored):
-  layout_path      DXF with Path_* / Stop_* / PD_* layers
+  layout_path      DXF with Path_* / Stop_* layers
   locations_path   WMS location master
   picks_path       WMS pick report (coverage check only)
 
@@ -12,6 +12,8 @@ Writes:
   data/processed/travel/stops.csv                    stop_id, x_in, y_in, node_type
   data/processed/travel/stop_distance_ft.csv         stop x stop shortest path, feet
   data/processed/travel/location_stop_crosswalk.csv  location -> stop_id (+ status)
+  data/processed/travel/pl_lane_assignment.csv       PL01-PL57 -> lane stops (provisional)
+  data/processed/travel/lane_labels.csv              each lane stop -> PL codes it serves
   runs/travel_network/manifest.json                  hashes, checks, coverage
 
 All outputs are derived from C&D data and stay out of git.
@@ -26,6 +28,7 @@ from reslot.config import load_config
 from reslot.io.locations import load_locations
 from reslot.io.wms_picks import load_wms_picks
 from reslot.travel import crosswalk as X
+from reslot.travel import lanes as LN
 from reslot.travel import network as N
 from reslot.utils.manifest import write_manifest
 
@@ -53,11 +56,13 @@ for k, label in [("duplicate_circles_merged", "duplicate circles merged"),
     if v:
         print(f"  NOTE {label}: {v if isinstance(v, int) else len(v)}"
               + ("" if isinstance(v, int) else f"  e.g. {v[:3]}"))
-if not checks["has_pd"]:
-    print("  WARNING no PD_Placeholder stop in the drawing -- trip start/drop-off missing; "
-          "hand-calc tests that start at PD will fail")
-if net["pd_mode"] == "placeholder":
-    print("  NOTE trip start/drop-off is a PLACEHOLDER -- do not cite trip totals")
+if checks["n_dispatch"] != 1:
+    raise SystemExit(f"need exactly one Stop_Dispatch circle (trip start), found {checks['n_dispatch']}")
+if checks["has_pd"]:
+    print("  NOTE a PD_Placeholder circle is still drawn -- retired, delete it")
+if net["drop_off_mode"] == "provisional":
+    print("  NOTE drop-off lanes follow the agreed PL->lane convention, not a site-confirmed "
+          "door map -- label trip totals provisional")
 
 # --- crosswalk -------------------------------------------------------------
 slots = load_locations(d["locations_path"])
@@ -74,6 +79,17 @@ print(f"  {sc['uom']} pick coverage {cov['coverage']:.1%} "
       f"({cov['mapped']:,}/{cov['picks']:,}); unmapped by aisle {cov['top_unmapped_aisles']}")
 print(f"  PL pick coverage {cov_pl['coverage']:.1%} of all, {cov_pl['coverage_rack_coded']:.1%} of "
       f"rack-coded (rest are production-line / dock pulls, not rack)")
+st_cfg = cfg["staging"]
+lanes = LN.lane_stops(stops, st_cfg["group_gap_in"])
+pl = LN.pl_lane_counts(slots, st_cfg["pl_pattern"], st_cfg["three_lane_min_capacity"])
+assign = LN.assign_pl_lanes(lanes, pl)
+labels = LN.lane_labels(lanes, assign)
+xw = LN.apply_to_crosswalk(xw, assign)
+shared = int((labels["pl_codes"].str.count("/") > 0).sum())
+split = assign.loc[assign["split_across_gap"], "location"].tolist()
+print(f"  staging: {len(pl)} PL codes asking {int(pl['n_lanes'].sum())} lanes on "
+      f"{len(lanes)} lane stops in {lanes['lane_group'].max()} groups; {shared} lanes shared by two PLs; "
+      f"split across a group gap: {split}")
 by_aisle = xw[xw["aisle"].notna()].groupby("aisle")["status"].value_counts().unstack(fill_value=0)
 bad = by_aisle[by_aisle.drop(columns=["ok"], errors="ignore").sum(axis=1) > 0]
 if len(bad):
@@ -85,10 +101,17 @@ out.mkdir(parents=True, exist_ok=True)
 stops.drop(columns=["node", "on_path"]).to_csv(out / "stops.csv", index=False)
 dist.to_csv(out / "stop_distance_ft.csv")
 xw.to_csv(out / "location_stop_crosswalk.csv", index=False)
+assign.assign(lane_stop_ids=assign["lane_stop_ids"].str.join("|"),
+              lane_groups=assign["lane_groups"].map(lambda g: "|".join(map(str, g)))
+              ).to_csv(out / "pl_lane_assignment.csv", index=False)
+labels.to_csv(out / "lane_labels.csv", index=False)
 
 run_dir = Path(cfg["paths"]["runs"]) / "travel_network"
 write_manifest(run_dir, cfg, inputs=[d["layout_path"], d["locations_path"], d["picks_path"]],
-               extra={"pd_mode": net["pd_mode"], "network": checks,
+               extra={"drop_off_mode": net["drop_off_mode"], "network": checks,
+                      "staging": {"pl_codes": len(pl), "lanes_asked": int(pl["n_lanes"].sum()),
+                                  "lane_stops": len(lanes), "lanes_shared": shared,
+                                  "split_across_gap": split},
                       "crosswalk": {"status": xw["status"].value_counts().to_dict(),
                                     **load, **cols},
                       "pick_coverage": cov, "pick_coverage_pl": cov_pl})

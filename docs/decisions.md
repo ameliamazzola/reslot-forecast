@@ -189,3 +189,26 @@ but the WMS has 304 locations there, 274 occupied, with 771 picks Sep 15–Oct
 **Reverses if.** A floor check finds a letter on the wrong path, or the site
 says the east aisles are numbered from the other end.
 
+---
+
+## 2026-10-19 — Trip ends: dispatch board and staging lanes
+
+**Decision.** Trips start at `Stop_Dispatch` (the dispatch board by the office,
+where operators get jobs) and drop off at `Stop_Lane` circles (100 outbound
+lane mouths, cross-aisle end, 25 groups of 4). `PD_Placeholder` is retired.
+
+**PL codes to lanes (provisional).** The WMS has PL01–PL57 (zone WZNDK); the
+drawing has 100 lanes. Rules agreed with Anthony: PL01 is the rightmost group
+and numbers ascend west; 44-pallet PLs get 2 lanes, 66/88 get 3 (131 lanes
+asked); one lane may serve two neighbouring PLs (31 do). Placement minimises
+PLs split across a group gap (5: PL23, 38, 46, 51, 54). PL..A codes are inbound
+receiving staging (they carry ~30k of the month's inbound putaways) and PL60
+has no lane; both are out of scope for now. A 2-lane PL routes to its right
+lane, a 3-lane PL to its middle lane.
+
+**Hand-calcs.** Dispatch → FF bays 1–4: 224.2 ft. Dispatch → lane 1 (PL01):
+456.3 ft.
+
+**Reverses if.** The site gives a lane-to-door map; then it replaces the
+convention and `drop_off_mode` flips to `real`.
+
