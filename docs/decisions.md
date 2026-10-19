@@ -212,3 +212,22 @@ lane, a 3-lane PL to its middle lane.
 **Reverses if.** The site gives a lane-to-door map; then it replaces the
 convention and `drop_off_mode` flips to `real`.
 
+---
+
+## 2026-10-19 — Production lines are stops
+
+**Decision.** `Stop_Line` circles mark where a forklift takes a finished pallet
+off each production line; a TEXT on `Line_Label` next to each names it with
+the WMS code. L1–L5 have one pickup each, L6 and L7 two; a code with two
+pickups maps to the one nearer the dispatch board. "Empty Pallets" and
+"Slip sheets" are drawn supply points with no WMS location yet. D01 (534
+moves) was not found on the drawing and stays unmapped.
+
+**Supervisor's location key (Oct 19) agrees with the model.** Bays start at
+the dock and run toward the chargers; putaway-zone section letters A/B/C line
+up with the crosswalk's top/middle/bottom segments (10,317 / 14,242 / 9,356).
+PY = tall-pallet slot, PZ = short; HH = household (A–Y), personal care Z–QQ,
+GG/HH partial pallets. PY/PZ is a hard constraint for re-slotting.
+
+**Hand-calc.** Dispatch → L3: 436.9 ft (down Y, along the upper cross-aisle).
+

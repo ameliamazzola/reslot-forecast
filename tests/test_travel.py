@@ -324,6 +324,38 @@ def test_stopless_fragment_is_pruned_but_stopped_piece_is_not():
 
 
 # --------------------------------------------------------------------------
+# Labels and production-line stops
+# --------------------------------------------------------------------------
+
+def _line_stops():
+    return pd.DataFrame({"stop_id": ["LN_0.0_0.0", "LN_0.0_100.0", "LN_500.0_0.0", "J_0.0_50.0"],
+                         "x_in": [0.0, 0.0, 500.0, 0.0], "y_in": [0.0, 100.0, 0.0, 50.0],
+                         "node_type": ["line", "line", "line", "junction"]})
+
+
+def test_label_goes_to_nearest_stop_within_reach_and_never_a_junction():
+    labels = [(2, 3, "L6", "line_label"), (1, 98, "L6", "line_label"),
+              (0, 52, "X", "line_label"),          # sits on the junction: nearest non-junction is 48 in away
+              (900, 900, "L9", "line_label")]      # nowhere near a stop
+    st, orphans = N.label_stops(_line_stops(), labels, max_in=24)
+    assert st.set_index("stop_id")["label"].to_dict() == {
+        "LN_0.0_0.0": "L6", "LN_0.0_100.0": "L6", "LN_500.0_0.0": None, "J_0.0_50.0": None}
+    assert orphans == ["X@0.0,52.0", "L9@900.0,900.0"]
+
+
+def test_code_drawn_twice_maps_to_the_nearer_pickup():
+    st = _line_stops().assign(label=["L6", "L6", "Slip sheets", None])
+    xw = pd.DataFrame({"location": ["L6", "C125B"], "status": ["not_a_rack_code", "ok"]})
+    rank = pd.Series({"LN_0.0_0.0": 300.0, "LN_0.0_100.0": 120.0, "LN_500.0_0.0": 50.0})
+    xw, table = X.apply_labelled_stops(xw, st, "line", rank_from=rank)
+    assert xw.set_index("location").loc["L6", "stop_id"] == "LN_0.0_100.0"
+    assert xw.set_index("location").loc["L6", "status"] == "ok"
+    t = table.set_index("label")
+    assert t.loc["L6", "n_stops"] == 2 and t.loc["L6", "in_wms"]
+    assert not t.loc["Slip sheets", "in_wms"]
+
+
+# --------------------------------------------------------------------------
 # Staging lanes (PL codes -> lane stops)
 # --------------------------------------------------------------------------
 
@@ -445,6 +477,8 @@ needs_outputs = pytest.mark.skipif(not (PROC / "stop_distance_ft.csv").exists(),
 @pytest.mark.parametrize("a,b,feet", [
     ("D_183183.9_5933.3", "S_180855.6_5571.4", 224.2),    # dispatch -> FF bays 1-4: (223+2328+139)/12
     ("D_183183.9_5933.3", "L_188380.6_5766.6", 456.3),    # dispatch -> lane 1 (PL01): (223+5197+56)/12
+    ("D_183183.9_5933.3", "LN_185783.2_3290.3", 436.9),   # dispatch -> line L3 via Y and the upper cross-aisle:
+                                                          # (223+77+2184+2400+237+123)/12
     ("S_180855.6_926.4", "S_180619.6_926.4", 41.1),       # FF -> GG via middle cross-aisle
     ("S_180855.6_3398.4", "S_180619.6_3398.4", 41.1),     # FF -> GG via upper cross-aisle
 ])
@@ -475,6 +509,15 @@ def test_real_pl_assignment_matches_agreed_rules():
     assert a.loc[0, "first_lane"] == 1 and a.iloc[-1]["last_lane"] == len(lab)
     assert (a["n_lanes"] == a["capacity"].map(lambda c: 3 if c >= 66 else 2)).all()
     assert lab["pl_codes"].notna().all() and lab["pl_codes"].str.count("/").max() <= 1
+
+
+@needs_outputs
+def test_real_production_lines_all_have_a_stop():
+    lines = pd.read_csv(PROC / "line_stops.csv").set_index("label")
+    for code in [f"L{i}" for i in range(1, 8)]:
+        assert lines.loc[code, "in_wms"], code
+    xw = pd.read_csv(PROC / "location_stop_crosswalk.csv", low_memory=False).set_index("location")
+    assert (xw.loc[[f"L{i}" for i in range(1, 8)], "status"] == "ok").all()
 
 
 @needs_outputs

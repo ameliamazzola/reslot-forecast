@@ -148,6 +148,12 @@ AutoCAD drawing, exported to DXF for processing (`DC_Layout_Paths_5.dxf`,
   / 88), PL08A, 13A, 17A, 25A, 35A, 38A, 47A, 50A also WZNDK (inbound), PL101,
   PL101A/B, PL102A elsewhere. Outbound DROPOFF rows don't record a PL yet --
   need TO_LOCATION on the export to know which lane a pallet went to.
+- **Production lines (Oct 19 drawing).** 11 `Stop_Line` circles labelled on
+  `Line_Label`: L1 (188089.5, 3285.9), L2 (187544.3, 3285.9), L3 (185783.2,
+  3290.3), L4 (186544.3, 3285.9), L5 (186902.0, 3283.5), L6 ×2 (188063.1,
+  328.8 / 399.5), L7 ×2 (187407.4, 327.8 / 398.9), Empty Pallets (186903.0,
+  2285.1), Slip sheets (186824.3, 2510.4). New connector at x 186747.6 meets
+  the y=1853.4 cross piece without a junction circle -- add one.
 - **Not drawn.** RR, ZZ (multi-level case pick), non-aisle location families
   (BW, GB, LS, VA–VN), production lines, staging lanes (along the top,
   y ≈ 5830–6310).

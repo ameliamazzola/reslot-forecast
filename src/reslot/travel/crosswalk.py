@@ -146,3 +146,35 @@ def pick_coverage(events: pd.DataFrame, xw: pd.DataFrame, zone: str, uom: str) -
             "coverage_rack_coded": float(racked["from_loc"].isin(ok).mean()) if len(racked) else 0.0,
             "top_unmapped_aisles": s.loc[~s["from_loc"].isin(ok), "from_loc"]
                                     .str.extract(r"^([A-Z]+)")[0].value_counts().head(8).to_dict()}
+
+
+def apply_labelled_stops(xw: pd.DataFrame, stops: pd.DataFrame, node_type: str,
+                         rank_from: pd.Series | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Map WMS locations to stops whose drawn label equals the location code
+    (e.g. production line L3 -> its Stop_Line circle).
+
+    A code drawn at two stops (L6 and L7 each have two pickup points) maps to
+    the one with the smaller value in `rank_from` (distance from dispatch, ft);
+    both are listed in `stop_ids`. Labels with no WMS location (Empty Pallets,
+    Slip sheets) are kept as stops but map nothing.
+    Returns (crosswalk, label table).
+    """
+    lab = stops[(stops["node_type"] == node_type) & stops["label"].notna()].copy()
+    if rank_from is not None:
+        lab["rank"] = lab["stop_id"].map(rank_from)
+        lab = lab.sort_values(["label", "rank", "stop_id"])
+    else:
+        lab = lab.sort_values(["label", "stop_id"])
+    table = (lab.groupby("label", sort=True)
+                .agg(stop_id=("stop_id", "first"), stop_ids=("stop_id", list),
+                     n_stops=("stop_id", "size"))
+                .reset_index())
+    table["in_wms"] = table["label"].isin(set(xw["location"]))
+    m = table.set_index("label")
+    xw = xw.copy()
+    hit = xw["location"].isin(m.index)
+    xw.loc[hit, "stop_id"] = xw.loc[hit, "location"].map(m["stop_id"])
+    xw.loc[hit, "node_type"] = node_type
+    xw.loc[hit, "segment"] = node_type
+    xw.loc[hit, "status"] = "ok"
+    return xw, table

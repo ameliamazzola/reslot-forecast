@@ -43,8 +43,10 @@ paths:
 network:
   layers:
     paths: [Path_Aisle, Path_Cross]
-    stops: {Stop_Rack: rack, Stop_Junction: junction, Stop_Lane: lane, Stop_Dispatch: dispatch, PD_Placeholder: pd}   # PD_Placeholder retired; kept so a stray one is reported
+    stops: {Stop_Rack: rack, Stop_Junction: junction, Stop_Lane: lane, Stop_Dispatch: dispatch, Stop_Line: line, PD_Placeholder: pd}   # PD_Placeholder retired; kept so a stray one is reported
+    labels: [Line_Label, Lane_Label]   # TEXT next to a stop names it (WMS code)
     columns: -ST_R_SD_COL        # rack sections with a building column (checks only)
+  label_max_in: 24               # a label belongs to the nearest stop within this
   snap_tol_in: 0.5               # float noise only; the drawing is exact
   drop_off_mode: provisional     # trip start = Stop_Dispatch (real); drop-off lane = PL convention
                                  # (configs staging:) until the site confirms lane-to-door -> real
