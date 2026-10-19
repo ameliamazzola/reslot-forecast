@@ -173,12 +173,18 @@ lines (WZPKG), which aren't racks. CS pick coverage unchanged at 97.2%.
 still fails the build. (3) Circles on path layers and lines on stop layers are
 ignored and listed, never guessed at. Crossings are still not auto-joined.
 
-**Open in the drawing (blocking citable numbers).** PD_Placeholder and its spur
-are missing from this export; X/Y bays 157–184 have no stops below the y=1544
-cross-aisle; P is missing its bottom stop (bays 263–266); CC's two tunnel
-junctions are on the wrong layer. 342 locations are `check_snap` because of
-these. DD vs CC (the two zig-zag paths) is assigned by order, not yet checked
-on the floor.
+**Drawing revisions (Oct 18, second pass).** P bottom stop added, CC tunnel
+junctions moved to `Stop_Junction`, missing junction circles added. The
+placeholder moved to (180174.4, 6094.1), between JJ and HH, on a 32 ft spur
+off the top cross-aisle (was between LL and KK); its hand-calc routes are now
+100.3 ft to FF bays 1–4 and 671.9 ft to the FF charger end.
+
+**Still open.** (1) The placeholder must sit on `PD_Placeholder` with a drawn
+spur line and a junction circle where the spur meets the top cross-aisle.
+(2) X/Y bays 157–184: the site says no racks below the y=1544 cross-aisle,
+but the WMS has 304 locations there, 274 occupied, with 771 picks Sep 15–Oct
+15. Until it's known where those pallets physically sit, they stay
+`check_snap`. (3) DD vs CC is assigned by order, not yet checked on the floor.
 
 **Reverses if.** A floor check finds a letter on the wrong path, or the site
 says the east aisles are numbered from the other end.

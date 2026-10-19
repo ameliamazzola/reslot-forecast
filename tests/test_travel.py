@@ -372,8 +372,8 @@ needs_outputs = pytest.mark.skipif(not (PROC / "stop_distance_ft.csv").exists(),
 
 @needs_outputs
 @pytest.mark.parametrize("a,b,feet", [
-    ("PD_179811.5_6131.4", "S_180855.6_5571.4", 133.7),   # placeholder -> FF bays 1-4
-    ("PD_179811.5_6131.4", "S_180855.6_-1287.6", 705.3),  # placeholder -> FF charger end
+    ("PD_180174.4_6094.1", "S_180855.6_5571.4", 100.3),   # placeholder -> FF bays 1-4: (384+681+139)/12
+    ("PD_180174.4_6094.1", "S_180855.6_-1287.6", 671.9),  # placeholder -> FF charger end: +571.6
     ("S_180855.6_926.4", "S_180619.6_926.4", 41.1),       # FF -> GG via middle cross-aisle
     ("S_180855.6_3398.4", "S_180619.6_3398.4", 41.1),     # FF -> GG via upper cross-aisle
 ])

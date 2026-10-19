@@ -118,23 +118,24 @@ AutoCAD drawing, exported to DXF for processing (`DC_Layout_Paths_5.dxf`,
   5710.4, 3526.9, 797.9 (gap between M and H), and a bottom cross at −1287.6
   (−1081.6 from F to A). Extra cross pieces at 1544.4 (under X/Y), 1853.4 and
   154.4. DD and CC are zig-zag paths (jogs at y 154–360).
-- **Drawing fixes still needed** (from the build manifest):
-  - Restore `PD_Placeholder` circle at (179811.5, 6131.4), its spur line down
-    to the top cross-aisle, and a junction circle at (179811.5, 5710.4).
-  - X, Y: draw the stops for bays 157–184 below the y=1544 cross-aisle (WMS
-    has racks there at levels A–F), or tell us that section isn't racked.
-  - P: add the rack circle at (186344.63, −1184.59) for bays 263–266.
-  - CC: circle at (181892.6, 3526.9) is on `Path_Cross` → move to
-    `Stop_Junction`; circle at (181892.6, 797.9) is on `Stop_Rack` → move to
+- **Drawing fixes (status after the Oct 18 second pass).**
+  - Done: P bottom stop (186344.63, −1184.59); CC junctions at
+    (181892.6, 3526.9) and (181892.6, 797.9) on `Stop_Junction`; junction
+    circles at (181592.6, −1410.1) and (181856.6, −1410.1); stray stubs
+    across G and F at y ≈ 3604 removed.
+  - Open: the placeholder circle at (180174.4, 6094.1) is on the `Pallet`
+    layer, which also holds a 4 × 11 grid of 44 circles in the staging lanes
+    (x 188230–188380). Move the one circle to `PD_Placeholder`, draw a line
+    straight down to (180174.4, 5710.41), and put a `Stop_Junction` circle
+    there.
+  - Open: X/Y bays 157–184 — site says no racks below the y=1544
+    cross-aisle, yet the WMS has 304 locations (274 occupied, zone WZGNH) and
+    771 picks Sep 15–Oct 15 there. Need to know where those pallets sit
+    (floor-stacked? numbered elsewhere?).
+  - Harmless, handled by the builder: 108 duplicate circles, two 1-inch
+    stubs near (181559.6, −1239) and (181889.6, −1239), 24 duplicate circles
+    on `Path_Cross` at y −1287.6, 2 duplicate DD/CC aisle lines on
     `Stop_Junction`.
-  - 24 more circles on `Path_Cross` along y=−1287.6 sit exactly on existing
-    junction circles: delete them.
-  - 4 lines on `Stop_Junction`: two repeat the DD/CC aisle lines near
-    y −1133 to −1030 (delete); two are 133" stubs across G and F at y ≈ 3604.
-    Ignored by the builder. If trucks can turn there, redraw on `Path_Cross`
-    with junction circles; otherwise delete.
-  - Delete the two 1-inch path stubs at x 181559.6 and 181889.6, y ≈ −1239.
-  - Junction circles missing at (181592.6, −1410.1) and (181856.6, −1410.1).
 - **Not drawn.** RR, ZZ (multi-level case pick), non-aisle location families
   (BW, GB, LS, VA–VN), production lines, staging lanes (along the top,
   y ≈ 5830–6310).
