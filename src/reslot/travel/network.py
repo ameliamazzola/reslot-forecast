@@ -19,6 +19,10 @@ circle. Lines that merely cross are not joined. That is deliberate -- every
 place a truck can turn has to be drawn -- and it is why every junction carries
 a circle. Guarded by test_crossing_without_shared_point_is_not_a_junction.
 
+Drawing hygiene handled here, all reported in the manifest: a circle pasted
+twice is one stop; a piece of path with no stop on it is dropped (it cannot be
+on any route); circles on path layers and lines on stop layers are ignored.
+
 Units are drawing units: inches, AutoCAD World coordinates. Distances are
 reported in feet.
 """
@@ -62,7 +66,7 @@ def read_layout(dxf_path: str | Path, layers: dict) -> dict:
     stop_layers = {_norm(k): v for k, v in layers["stops"].items()}
     col_layer = _norm(layers.get("columns", ""))
 
-    lines, circles, columns = [], [], []
+    lines, circles, columns, misfiled = [], [], [], []
     for ent in iterdxf.modelspace(str(dxf_path)):
         lay, kind = _norm(ent.dxf.get("layer", "")), ent.dxftype()
         if kind == "LINE" and lay in path_layers:
@@ -72,7 +76,16 @@ def read_layout(dxf_path: str | Path, layers: dict) -> dict:
             circles.append((c[0], c[1], stop_layers[lay]))
         elif kind == "INSERT" and col_layer and lay == col_layer:
             columns.append(tuple(ent.dxf.insert)[:2])
-    return {"lines": lines, "circles": circles, "columns": columns}
+        elif kind == "CIRCLE" and lay in path_layers:
+            c = tuple(ent.dxf.center)[:2]
+            misfiled.append(f"CIRCLE on {lay} @{c[0]:.1f},{c[1]:.1f}")
+        elif kind == "LINE" and lay in stop_layers:
+            a, b = tuple(ent.dxf.start)[:2], tuple(ent.dxf.end)[:2]
+            misfiled.append(f"LINE on {lay} @{a[0]:.1f},{a[1]:.1f}->{b[0]:.1f},{b[1]:.1f}")
+    # Misfiled entities are NOT used -- a circle on a path layer is not a stop,
+    # a line on a stop layer is not a path. They are reported so the drawing
+    # gets fixed, never guessed at.
+    return {"lines": lines, "circles": circles, "columns": columns, "misfiled": misfiled}
 
 
 # --------------------------------------------------------------------------
@@ -87,6 +100,16 @@ def build_graph(lines, circles, tol_in: float = 0.5):
     tol_in only absorbs floating-point noise; a clean drawing needs nothing
     looser. Returns (graph, stops) where stops has one row per circle.
     """
+    # A circle drawn twice (copy/paste) is one stop: same kind, same stop_id.
+    seen, uniq = set(), []
+    for x, y, kind in circles:
+        sid = stop_id(kind, x, y)
+        if sid not in seen:
+            seen.add(sid)
+            uniq.append((x, y, kind))
+    n_dup = len(circles) - len(uniq)
+    circles = uniq
+
     segs = [(np.asarray(a, float), np.asarray(b, float), lay) for a, b, lay in lines]
     segs = [s for s in segs if np.hypot(*(s[1] - s[0])) > 0.01]
     C = np.array([(x, y) for x, y, _ in circles], float).reshape(-1, 2)
@@ -122,7 +145,29 @@ def build_graph(lines, circles, tol_in: float = 0.5):
                      "node_type": kind, "node": node, "on_path": node in G})
         if node in G:
             G.nodes[node]["node_type"] = kind
-    return G, pd.DataFrame(rows)
+    stops = pd.DataFrame(rows)
+    stops.attrs["duplicate_circles_merged"] = n_dup
+    return G, stops
+
+
+def prune_orphan_fragments(G: nx.Graph) -> list[str]:
+    """Remove connected pieces that carry no stop circle, in place.
+
+    A fragment with no stop can never be the start or end of a route, so it
+    cannot change any distance -- typically a stray 1-inch line left behind by
+    an edit. Pieces WITH a stop are never removed: if they are disconnected the
+    network check fails, because that is a real gap in the drawing.
+    Returns a description of each removed fragment for the manifest.
+    """
+    typed = nx.get_node_attributes(G, "node_type")
+    removed = []
+    for comp in list(nx.connected_components(G)):
+        if not any(n in typed for n in comp):
+            length = sum(d["length_in"] for _, _, d in G.subgraph(comp).edges(data=True))
+            n0 = min(comp)
+            removed.append(f"{len(comp)} vertices, {length:.1f} in, @{n0[0]:.1f},{n0[1]:.1f}")
+            G.remove_nodes_from(comp)
+    return removed
 
 
 def distance_matrix_ft(G: nx.Graph, stops: pd.DataFrame) -> pd.DataFrame:
@@ -140,11 +185,14 @@ def distance_matrix_ft(G: nx.Graph, stops: pd.DataFrame) -> pd.DataFrame:
 # Checks -- written into the manifest, asserted by tests
 # --------------------------------------------------------------------------
 
-def network_checks(G: nx.Graph, stops: pd.DataFrame) -> dict:
+def network_checks(G: nx.Graph, stops: pd.DataFrame, orphans: list | None = None,
+                   misfiled: list | None = None) -> dict:
     """What would make the distance table wrong, counted.
 
     junctions_without_circle: places three or more paths meet with no circle.
     The graph still works, but the drawing no longer documents itself.
+    misfiled_entities_ignored: circles on path layers / lines on stop layers.
+    Not used; fix in the drawing.
     """
     deg = dict(G.degree())
     typed = nx.get_node_attributes(G, "node_type")
@@ -156,6 +204,10 @@ def network_checks(G: nx.Graph, stops: pd.DataFrame) -> dict:
         "stops_by_type": stops["node_type"].value_counts().to_dict(),
         "circles_off_path": stops.loc[~stops["on_path"], "stop_id"].tolist(),
         "duplicate_stop_ids": int(stops["stop_id"].duplicated().sum()),
+        "duplicate_circles_merged": int(stops.attrs.get("duplicate_circles_merged", 0)),
+        "orphan_fragments_removed": list(orphans or []),
+        "misfiled_entities_ignored": list(misfiled or []),
+        "has_pd": bool((stops["node_type"] == "pd").any()),
         "dead_ends": sorted([f"{typed.get(n, 'vertex')}@{n[0]:.1f},{n[1]:.1f}"
                              for n, d in deg.items() if d == 1]),
         "junctions_without_circle": sorted([f"{n[0]:.1f},{n[1]:.1f}" for n, d in deg.items()
