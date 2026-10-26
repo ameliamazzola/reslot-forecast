@@ -231,3 +231,29 @@ GG/HH partial pallets. PY/PZ is a hard constraint for re-slotting.
 
 **Hand-calc.** Dispatch → L3: 436.9 ft (down Y, along the upper cross-aisle).
 
+## Affinity clustering + forecast join (Oct 2026)
+
+**Data filters (build_matrix.py)**
+- VMS: drop SKUs picked from zone WZVMS (discontinued Vitafusion/L'il Critters finished goods,
+  ingredients, packaging), except active brands stored there (VMS_KEEP_PATTERN = "ARRID").
+- Discontinued vitamin lines dropped wherever stored (VITAMIN_PATTERN = "VITFUS|CRITTER").
+  Viviscal is active and is kept.
+- Full-pallet picks included.
+
+**Affinity settings**
+- Transaction = customer order; item = SKU.
+- fpgrowth: MIN_SUPPORT = 0.005, MAX_LEN = 2.
+- Edge weight = Jaccard; strong edges MIN_JACCARD = 0.10.
+- Louvain: resolution = 1.0, seed = 42.
+
+**Results**
+- 8 clusters, modularity ≈ 0.52.
+- Robustness: ARI 0.81–1.00 vs. baseline across Jaccard 0.10–0.20 at resolution ≤ 1.0.
+- Two disconnected components: personal care (218 SKUs) and household (129), plus Platinum litter (3).
+- Clustered SKUs = 26% of SKUs, 66% of pick lines.
+- Household clusters mostly full-pallet → place by dock distance; personal care mostly case-pick → place by adjacency.
+
+**Forecast join (combine_with_forecast.py)**
+- Affinity measured by order co-occurrence; demand measured in pick lines.
+- Anticipatory candidate rule: change_flag = "up" AND demand_group in {Steady, Variable}.
+- New SKUs (< 28 days history) have no forecast; need a placement rule.   

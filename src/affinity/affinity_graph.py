@@ -120,6 +120,10 @@ labels["descr"] = labels["sku"].map(descr)
 print(labels["group"].value_counts())
 labels.to_csv(PROCESSED_DIR / "sku_labels.csv", index=False)
 
+#%%
+for i in range(len(clusters)):
+    print(f"\n--- Cluster {i} ({len(clusters[i])} SKUs) ---")
+    print(cluster_table[cluster_table["cluster"] == i].head(6)[["orders", "descr"]].to_string(index=False))
 
 # %%
 lines_per_sku = picks_dt.groupby("FROM_ITEM").size()
@@ -191,5 +195,3 @@ plt.axis("off")
 plt.savefig(PROCESSED_DIR / "affinity_graph.png", dpi=200, bbox_inches="tight")
 plt.show()
 
-
-# %%
