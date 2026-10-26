@@ -11,7 +11,11 @@ ignored -- AutoCAD exported them as 'Path_Aisle etc.):
     path_aisle, path_cross   LINE     travel paths (graph edges)
     stop_rack                CIRCLE   where a truck stops at rack; 4 locations each
     stop_junction            CIRCLE   aisle / cross-aisle intersections; no locations
-    pd_placeholder           CIRCLE   PLACEHOLDER trip start / drop-off
+    stop_lane                CIRCLE   outbound staging lane mouth (cross-aisle end); drop-off
+    stop_dispatch            CIRCLE   dispatch board, where trucks pick up jobs; trip start
+    stop_line                CIRCLE   production-line pallet pickup (and supply points)
+    line_label, lane_label   TEXT     names the nearest stop (WMS code, e.g. L3)
+    pd_placeholder           CIRCLE   legacy placeholder trip start / drop-off (retired)
     -st_r_sd_col             INSERT   rack sections with a building column (checks only)
 
 Two lines are connected ONLY where they share a point: an endpoint or a stop
@@ -36,7 +40,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
-STOP_PREFIX = {"rack": "S", "junction": "J", "pd": "PD"}
+STOP_PREFIX = {"rack": "S", "junction": "J", "lane": "L", "dispatch": "D", "line": "LN", "pd": "PD"}
 
 
 def _norm(layer: str) -> str:
@@ -65,8 +69,9 @@ def read_layout(dxf_path: str | Path, layers: dict) -> dict:
     path_layers = {_norm(l) for l in layers["paths"]}
     stop_layers = {_norm(k): v for k, v in layers["stops"].items()}
     col_layer = _norm(layers.get("columns", ""))
+    label_layers = {_norm(l) for l in layers.get("labels", [])}
 
-    lines, circles, columns, misfiled = [], [], [], []
+    lines, circles, columns, misfiled, labels = [], [], [], [], []
     for ent in iterdxf.modelspace(str(dxf_path)):
         lay, kind = _norm(ent.dxf.get("layer", "")), ent.dxftype()
         if kind == "LINE" and lay in path_layers:
@@ -76,6 +81,10 @@ def read_layout(dxf_path: str | Path, layers: dict) -> dict:
             circles.append((c[0], c[1], stop_layers[lay]))
         elif kind == "INSERT" and col_layer and lay == col_layer:
             columns.append(tuple(ent.dxf.insert)[:2])
+        elif kind in ("TEXT", "MTEXT") and lay in label_layers:
+            p = tuple(ent.dxf.insert)[:2]
+            txt = ent.dxf.text if kind == "TEXT" else ent.text
+            labels.append((p[0], p[1], str(txt).strip(), lay))
         elif kind == "CIRCLE" and lay in path_layers:
             c = tuple(ent.dxf.center)[:2]
             misfiled.append(f"CIRCLE on {lay} @{c[0]:.1f},{c[1]:.1f}")
@@ -85,7 +94,8 @@ def read_layout(dxf_path: str | Path, layers: dict) -> dict:
     # Misfiled entities are NOT used -- a circle on a path layer is not a stop,
     # a line on a stop layer is not a path. They are reported so the drawing
     # gets fixed, never guessed at.
-    return {"lines": lines, "circles": circles, "columns": columns, "misfiled": misfiled}
+    return {"lines": lines, "circles": circles, "columns": columns, "misfiled": misfiled,
+            "labels": labels}
 
 
 # --------------------------------------------------------------------------
@@ -150,6 +160,29 @@ def build_graph(lines, circles, tol_in: float = 0.5):
     return G, stops
 
 
+def label_stops(stops: pd.DataFrame, labels: list, max_in: float) -> tuple[pd.DataFrame, list]:
+    """Attach each label to the nearest stop circle within max_in.
+
+    Returns (stops with a `label` column, labels that found no stop). Labels
+    name stops in WMS terms (L3, Empty Pallets); they never move a stop.
+    Junctions are never labelled.
+    """
+    stops = stops.copy()
+    stops["label"] = None
+    cand = stops[stops["node_type"] != "junction"]
+    xy = cand[["x_in", "y_in"]].to_numpy()
+    orphans = []
+    for x, y, txt, lay in labels:
+        if len(xy) == 0:
+            orphans.append(f"{txt}@{x:.1f},{y:.1f}"); continue
+        d = np.hypot(xy[:, 0] - x, xy[:, 1] - y)
+        i = int(d.argmin())
+        if d[i] > max_in:
+            orphans.append(f"{txt}@{x:.1f},{y:.1f}"); continue
+        stops.loc[cand.index[i], "label"] = txt
+    return stops, orphans
+
+
 def prune_orphan_fragments(G: nx.Graph) -> list[str]:
     """Remove connected pieces that carry no stop circle, in place.
 
@@ -208,8 +241,12 @@ def network_checks(G: nx.Graph, stops: pd.DataFrame, orphans: list | None = None
         "orphan_fragments_removed": list(orphans or []),
         "misfiled_entities_ignored": list(misfiled or []),
         "has_pd": bool((stops["node_type"] == "pd").any()),
+        "n_dispatch": int((stops["node_type"] == "dispatch").sum()),
+        "n_lane": int((stops["node_type"] == "lane").sum()),
+        # Lane mouths, line pickups and the dispatch board are spur ends on purpose.
         "dead_ends": sorted([f"{typed.get(n, 'vertex')}@{n[0]:.1f},{n[1]:.1f}"
-                             for n, d in deg.items() if d == 1]),
+                             for n, d in deg.items()
+                             if d == 1 and typed.get(n) not in ("lane", "dispatch", "line", "pd")]),
         "junctions_without_circle": sorted([f"{n[0]:.1f},{n[1]:.1f}" for n, d in deg.items()
                                             if d >= 3 and n not in typed]),
         "rack_stops_at_junctions": sorted([f"{n[0]:.1f},{n[1]:.1f}" for n, d in deg.items()

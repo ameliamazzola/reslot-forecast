@@ -43,10 +43,20 @@ paths:
 network:
   layers:
     paths: [Path_Aisle, Path_Cross]
-    stops: {Stop_Rack: rack, Stop_Junction: junction, PD_Placeholder: pd}
+    stops: {Stop_Rack: rack, Stop_Junction: junction, Stop_Lane: lane, Stop_Dispatch: dispatch, Stop_Line: line, PD_Placeholder: pd}   # PD_Placeholder retired; kept so a stray one is reported
+    labels: [Line_Label, Lane_Label]   # TEXT next to a stop names it (WMS code)
     columns: -ST_R_SD_COL        # rack sections with a building column (checks only)
+  label_max_in: 24               # a label belongs to the nearest stop within this
   snap_tol_in: 0.5               # float noise only; the drawing is exact
-  pd_mode: placeholder           # placeholder | real -- flip when staging data lands
+  drop_off_mode: provisional     # trip start = Stop_Dispatch (real); drop-off lane = PL convention
+                                 # (configs staging:) until the site confirms lane-to-door -> real
+
+staging:
+  # Outbound pallet lanes PL01-PL57 -> drawn Stop_Lane circles. Rules agreed
+  # Oct 19, provisional until the site confirms lane-to-door. See travel/lanes.py.
+  pl_pattern: 'PL(0[1-9]|[1-4][0-9]|5[0-7])'   # A-codes (inbound) and PL60 excluded
+  three_lane_min_capacity: 66   # 44 pallets -> 2 lanes, 66/88 -> 3
+  group_gap_in: 60              # lanes 50" apart inside a group; groups 192"+ apart
 
 crosswalk:
   # Aisle code -> x of its drawn path. FF is the rightmost (east) aisle.
