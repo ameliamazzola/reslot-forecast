@@ -38,6 +38,10 @@ print("orders:", len(skus_per_order))
 print("single-SKU orders:", (skus_per_order == 1).sum())
 
 # %%
+vitamin_pattern = "VITFUS|VITAMIN|CRITTER|GUMM"
+vit = picks[picks["FROM_DESCR"].str.contains(vitamin_pattern, case=False, na=False)]
+print(vit[["FROM_ITEM", "FROM_DESCR", "FROM_ZONE"]].drop_duplicates("FROM_ITEM").to_string())
+# %%
 vms_skus = picks.loc[picks["FROM_ZONE"] == "WZVMS", "FROM_ITEM"].unique()
 
 vms_info = (picks[picks["FROM_ITEM"].isin(vms_skus)]
@@ -55,6 +59,8 @@ DROP_INACTIVE_SKUS     = True          # SKUs not picked since the cutoff
 INACTIVE_CUTOFF        = "2026-03-01"
 DROP_RARE_SKUS         = True          # SKUs on very few orders
 MIN_ORDERS_PER_SKU     = 5
+DROP_VITAMIN_BRANDS = True
+VITAMIN_PATTERN = "VITFUS|CRITTER"     # adjust after Step 1
 DROP_LARGE_ORDERS      = False          # orders with a huge number of SKUs
 MAX_SKUS_PER_ORDER     = 100
 DROP_SINGLE_SKU_ORDERS = False          # always runs last
@@ -70,6 +76,11 @@ if DROP_VMS:
     vms_skus = picks.loc[picks["FROM_ZONE"] == "WZVMS", "FROM_ITEM"].unique()
     picks = picks[~picks["FROM_ITEM"].isin(vms_skus)]
     log_step("drop VMS SKUs")
+
+if DROP_VITAMIN_BRANDS:
+    vit_skus = picks.loc[picks["FROM_DESCR"].str.contains(VITAMIN_PATTERN, case=False, na=False), "FROM_ITEM"].unique()
+    picks = picks[~picks["FROM_ITEM"].isin(vit_skus)]
+    log_step("drop vitamin brands")
 
 # 2. Non-rack zones
 if DROP_NON_RACK_ZONES:
