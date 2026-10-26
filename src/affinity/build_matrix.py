@@ -60,6 +60,7 @@ INACTIVE_CUTOFF        = "2026-03-01"
 DROP_RARE_SKUS         = True          # SKUs on very few orders
 MIN_ORDERS_PER_SKU     = 5
 DROP_VITAMIN_BRANDS = True
+VMS_KEEP_PATTERN = "ARRID"      # active brands that were stored in WZVMS; do not drop
 VITAMIN_PATTERN = "VITFUS|CRITTER"     # adjust after Step 1
 DROP_LARGE_ORDERS      = False          # orders with a huge number of SKUs
 MAX_SKUS_PER_ORDER     = 100
@@ -70,13 +71,15 @@ filter_log = [("start", len(picks), picks["ORD_NO"].nunique(), picks["FROM_ITEM"
 
 def log_step(name):
     filter_log.append((name, len(picks), picks["ORD_NO"].nunique(), picks["FROM_ITEM"].nunique()))
-
-# 1. VMS: drop every SKU ever picked from the VMS zone, in any zone
+# 1. VMS: drop SKUs picked from the VMS zone, except active brands stored there
 if DROP_VMS:
-    vms_skus = picks.loc[picks["FROM_ZONE"] == "WZVMS", "FROM_ITEM"].unique()
+    vms_rows = picks["FROM_ZONE"] == "WZVMS"
+    keep_rows = picks["FROM_DESCR"].str.contains(VMS_KEEP_PATTERN, case=False, na=False)
+    vms_skus = picks.loc[vms_rows & ~keep_rows, "FROM_ITEM"].unique()
     picks = picks[~picks["FROM_ITEM"].isin(vms_skus)]
     log_step("drop VMS SKUs")
 
+# 1b. Discontinued vitamin lines, wherever they were stored
 if DROP_VITAMIN_BRANDS:
     vit_skus = picks.loc[picks["FROM_DESCR"].str.contains(VITAMIN_PATTERN, case=False, na=False), "FROM_ITEM"].unique()
     picks = picks[~picks["FROM_ITEM"].isin(vit_skus)]
