@@ -13,3 +13,4 @@ mlxtend
 ipykernel
 joblib
 lightgbm
+SimPy
