@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RackSmart simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>RackSmart simulator</h1>
+      <p class="sub" id="subtitle">York DC case-pick replay: real tours on the real travel network, under each slotting policy.</p>
+    </div>
+    <div id="polWrap" hidden>
+      <span class="seglabel">Policy shown</span>
+      <div class="seg" id="polSeg" role="group" aria-label="Policy shown"></div>
+    </div>
+  </header>
+  <div class="tape" aria-hidden="true"></div>
+
+  <section class="empty" id="empty">
+    <h2>Load a simulation bundle</h2>
+    <ol>
+      <li>Run the reference and the three policies, and bundle them: <code>python scripts/run_all.py</code></li>
+      <li>(Or by hand: <code>scripts/run_sim.py --policy …</code> for static, abc_cost_test, family_grouping, racksmart, then <code>scripts/export_ui.py</code>.)</li>
+      <li>Choose <code>data/processed/ui/bundle_&lt;start&gt;_&lt;end&gt;.json</code>, or drop it here.</li>
+    </ol>
+    <label class="load">Choose bundle<input type="file" id="file" accept=".json,application/json"></label>
+    <p class="note">The file is read in this browser only. Nothing is uploaded or saved.</p>
+    <p class="err" id="err" role="alert"></p>
+  </section>
+
+  <div id="app" hidden>
+    <section class="kpis">
+      <div class="card">
+        <h2>Workload</h2>
+        <div class="big" id="wBig">—</div>
+        <ul class="rows">
+          <li><span>Tours</span><span id="wTours">—</span></li>
+          <li><span>Dropped picks</span><span id="wDropped">—</span></li>
+        </ul>
+        <ul class="rows" id="wReasons"></ul>
+        <p class="note">Case picks only (WZPCK/CS). A pick that can't be placed on the travel network is dropped and counted by reason, never guessed.</p>
+      </div>
+
+      <div class="card hero">
+        <div class="head">
+          <h2 id="hTitle">Driving</h2>
+          <div class="seg" data-per role="group" aria-label="Period">
+            <button data-v="day" aria-pressed="false">Day</button>
+            <button data-v="all" aria-pressed="true">Whole run</button>
+          </div>
+        </div>
+        <div class="big" id="hBig">—</div>
+        <p class="note" id="hNote">—</p>
+        <div class="cols">
+          <div>
+            <h3>This policy</h3>
+            <ul class="rows">
+              <li><span>Pick-to-pick feet</span><span id="hPick">—</span></li>
+              <li><span>Dispatch legs, feet</span><span id="hDisp">—</span></li>
+              <li><span>Simulated pick hours</span><span id="hHours">—</span></li>
+            </ul>
+          </div>
+          <div id="hVs">
+            <h3>Compared with current slotting</h3>
+            <ul class="rows">
+              <li><span>Pick-to-pick feet</span><span id="vFeet">—</span></li>
+              <li><span>Simulated pick hours</span><span id="vHours">—</span></li>
+              <li><span>Move cost, whole plan</span><span id="vMove">—</span></li>
+            </ul>
+          </div>
+        </div>
+        <p class="note" id="hModel">—</p>
+      </div>
+
+      <div class="card">
+        <h2 id="cTitle">Cost</h2>
+        <div class="big" id="cBig">—</div>
+        <p class="note" id="cNote">—</p>
+        <ul class="rows" id="cRows"></ul>
+        <p class="note" id="cModel">—</p>
+      </div>
+
+      <div class="card">
+        <h2>Re-slotting plan</h2>
+        <div class="big" id="pBig">—</div>
+        <p class="note" id="pNote">—</p>
+        <ul class="rows" id="pRows"></ul>
+        <details class="gaps" id="pGapsWrap"><summary id="pGapsSum">Known gaps</summary><ul class="rows" id="pGaps"></ul></details>
+      </div>
+    </section>
+
+    <section class="main">
+      <div class="card mapcard">
+        <div class="maphead"><h2 id="mapTitle">Picks by stop</h2><span class="when" id="mapWhen">—</span></div>
+        <div class="mapbox" id="mapbox">
+          <canvas class="floor-canvas" id="floor" role="img" aria-label="York DC floor plan: picks by stop"></canvas>
+          <div class="tip" id="tip"></div>
+        </div>
+        <div class="legend">
+          <span>Fewer</span><span class="ramp"></span><span>More picks</span>
+          <span style="margin-left:12px">Each block is one rack stop (both faces of a 103" section). Grey blocks have no case-pick face. Same color scale on every tab. Hover for detail.</span>
+        </div>
+      </div>
+      <aside class="side">
+        <div class="card">
+          <h2>Leg-model check, out of time</h2>
+          <p class="note" style="margin:-4px 0 6px">Current-slotting run, the same on every tab</p>
+          <div class="big" id="kBig">—</div>
+          <ul class="rows" id="kRows"></ul>
+          <p class="note" id="kNote">—</p>
+        </div>
+        <div class="card">
+          <h2>Map</h2>
+          <div class="seg" data-per role="group" aria-label="Period">
+            <button data-v="day" aria-pressed="false">Day</button>
+            <button data-v="all" aria-pressed="true">Whole run</button>
+          </div>
+          <label class="check"><input type="checkbox" id="swapsOn" checked> <span id="swapsLabel">Show this method's swaps</span></label>
+          <label class="check"><input type="checkbox" id="swapsAll"> <span id="swapsAllLabel">Show all swaps</span></label>
+          <label class="check"><input type="checkbox" id="goldenOn" checked> <span id="goldenLabel">Outline the golden zone</span></label>
+          <label class="check"><input type="checkbox" id="labelsOn" checked> Label aisles</label>
+        </div>
+        <div class="card">
+          <h2 id="barsTitle">Pick-to-pick feet, by policy</h2>
+          <div id="bars"></div>
+          <p class="note">Same tours under every policy. Dispatch legs left out (drop-off provisional).</p>
+        </div>
+        <div class="card">
+          <h2>Run assumptions</h2>
+          <ul class="assume" id="assume"></ul>
+        </div>
+      </aside>
+    </section>
+
+    <section class="card timeline">
+      <div class="tlhead"><div class="datebig" id="dateBig">—</div><button class="play" id="play">Play</button></div>
+      <svg class="tl-chart" id="tl" aria-hidden="true"></svg>
+      <label class="sr" for="day">Day</label>
+      <input type="range" id="day" min="0" max="0" value="0">
+      <div class="tlkey">
+        <span><i></i>Case picks simulated per day</span>
+        <span><i class="sel"></i>Selected day (cards and map show it)</span>
+        <span id="tlMoveKey"><i class="m"></i>Swaps made before the first day (one plan, no moves during the run)</span>
+      </div>
+    </section>
+    <section class="card" id="affCard" style="margin-top:var(--gap)">
+      <div class="maphead"><h2>Affinity clusters</h2><span class="when" id="affWhen">—</span></div>
+      <div class="graphgrid">
+        <div class="mapbox" id="affbox">
+          <canvas class="graph-canvas" id="aff" role="img" aria-label="Affinity graph: products ordered together, colored by cluster"></canvas>
+          <div class="tip" id="affTip"></div>
+        </div>
+        <div>
+          <ul class="clusters" id="affList" aria-label="Clusters (hover or click to highlight)"></ul>
+          <p class="note" id="affNote">—</p>
+        </div>
+      </div>
+    </section>
+    <footer id="foot"></footer>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const SCHEMA = 'racksmart-ui/1';
+// The three tabs, in this order. Static is not a tab: it runs as the hidden reference
+// (current slotting) every comparison is made against (docs/decisions.md 2026-11-02).
+const TABS = ['abc_cost_test', 'family_grouping', 'racksmart'];
+const NAMES = { abc_cost_test: 'ABC', family_grouping: 'Family grouping', racksmart: 'RackSmart',
+  static: 'Current slotting', classic_abc: 'Classic ABC (no cost test)' };
+const pname = p => NAMES[p] || p.replace(/_/g, ' ');
+const num = v => Math.round(v).toLocaleString('en-US');
+const st = { bundle: null, pol: null, per: 'all', day: 0 };   // day: set by the timeline
+
+// ---------- loading and checks ----------
+function check(b) {
+  if (!b || b.schema !== SCHEMA) return `Not a simulation bundle (expected schema ${SCHEMA}). Make it with scripts/export_ui.py.`;
+  if (!Array.isArray(b.dates) || !b.dates.length) return 'The bundle has no dates.';
+  if (!Array.isArray(b.runs) || !b.runs.length) return 'The bundle has no runs.';
+  if (!b.network || !Array.isArray(b.network.stops)) return 'The bundle has no travel network.';
+  for (const r of b.runs) {
+    if (!r.policy || !r.daily || !r.manifest) return `A run in the bundle is incomplete (${r.name || 'unnamed'}).`;
+    if (r.daily.picks.length !== b.dates.length) return `Run ${r.name} does not cover the bundle's ${b.dates.length} days.`;
+  }
+  if (!b.runs.some(r => r.policy === 'static'))
+    return 'The bundle has no static run. It is the reference every policy is compared with: run it too (scripts/run_all.py does).';
+  if (!b.runs.some(r => TABS.includes(r.policy)))
+    return `The bundle has none of the policies shown here (${TABS.join(', ')}).`;
+  return null;
+}
+
+async function readFile(f) {
+  $('err').textContent = '';
+  let b;
+  try { b = JSON.parse(await f.text()); }
+  catch (e) { $('err').textContent = `${f.name} isn't valid JSON.`; return; }
+  const problem = check(b);
+  if (problem) { $('err').textContent = problem; return; }
+  loadBundle(b);
+}
+$('file').addEventListener('change', e => e.target.files[0] && readFile(e.target.files[0]));
+const drop = $('empty');
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', e => e.dataTransfer.files[0] && readFile(e.dataTransfer.files[0]));
+
+function loadBundle(b) {
+  st.bundle = b;
+  // tabs: the three policies, in TABS order; static is kept aside as the reference
+  const runs = TABS.map(p => b.runs.find(r => r.policy === p)).filter(Boolean);
+  st.runs = runs;
+  st.ref = b.runs.find(r => r.policy === 'static');
+  st.pol = (runs.find(r => r.policy === 'racksmart') || runs[0]).policy;
+  const seg = $('polSeg'); seg.replaceChildren();
+  runs.forEach(r => {
+    const btn = document.createElement('button');
+    btn.dataset.v = r.policy; btn.textContent = pname(r.policy);
+    btn.setAttribute('aria-pressed', r.policy === st.pol);
+    seg.append(btn);
+  });
+  $('polWrap').hidden = false;
+  $('empty').hidden = true; $('app').hidden = false;
+  const d = s => new Date(s + 'T12:00:00');
+  const f = (s, o) => d(s).toLocaleDateString('en-US', o);
+  readPal(); buildGeometry(); sizeCanvas();
+  ag.sel = null; renderAffinity();
+  $('subtitle').textContent = `York DC case-pick replay, ${f(b.dates[0], { month: 'short', day: 'numeric' })} to ` +
+    `${f(b.dates[b.dates.length - 1], { month: 'short', day: 'numeric', year: 'numeric' })}: real tours on the real travel network.`;
+  render();
+}
+$('polSeg').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  $('polSeg').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === btn));
+  st.pol = btn.dataset.v; render();
+});
+const run = () => st.runs.find(r => r.policy === st.pol);
+
+// ---------- helpers ----------
+const ref = () => st.ref;
+const fmt$ = v => (v < 0 ? '−⁠$' : '$') + Math.abs(v).toLocaleString('en-US',   // word joiner: never split −$
+  { minimumFractionDigits: Math.abs(v) < 100 ? 2 : 0, maximumFractionDigits: Math.abs(v) < 100 ? 2 : 0 });
+const pct = (a, b) => (b ? 100 * a / b : 0);
+const sum = xs => xs.reduce((t, v) => t + (v || 0), 0);
+const dayName = (i, o) => new Date(st.bundle.dates[i] + 'T12:00:00').toLocaleDateString('en-US', o || { weekday: 'short', month: 'short', day: 'numeric' });
+function span() { return st.per === 'day' ? [st.day, st.day] : [0, st.bundle.dates.length - 1]; }
+function total(r, key) { const [a, b] = span(); let s = 0; for (let i = a; i <= b; i++) s += r.daily[key][i] || 0; return s; }
+function droppedBy(r) {
+  const [a, b] = span(), acc = {};
+  for (let i = a; i <= b; i++) for (const [k, v] of Object.entries(r.daily.dropped[i] || {})) acc[k] = (acc[k] || 0) + v;
+  return acc;
+}
+function setBig(id, value, unit, cls) {
+  const el = $(id); el.replaceChildren(value);
+  el.className = 'big' + (cls ? ' ' + cls : '');
+  if (unit) { const s = document.createElement('small'); s.textContent = unit; el.append(s); }
+}
+function setRows(id, rows) {
+  const ul = $(id); ul.replaceChildren();
+  rows.forEach(([k, v]) => {
+    const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('span');
+    a.textContent = k; b.textContent = v; li.append(a, b); ul.append(li);
+  });
+}
+const periodText = () => (st.per === 'day' ? 'on ' + dayName(st.day, { weekday: 'long', month: 'short', day: 'numeric' }) : `over the whole run (${st.bundle.dates.length} days)`);
+// Period: one setting, shown by every [data-per] switch (hero card and map card).
+document.querySelectorAll('[data-per]').forEach(seg => seg.addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  st.per = btn.dataset.v;
+  document.querySelectorAll('[data-per] button').forEach(x => x.setAttribute('aria-pressed', x.dataset.v === st.per));
+  render();
+}));
+
+// ---------- cards ----------
+function renderWorkload(r) {
+  const picks = total(r, 'picks'), drop = droppedBy(r), nDrop = Object.values(drop).reduce((a, b) => a + b, 0);
+  setBig('wBig', num(picks), 'picks simulated');
+  $('wTours').textContent = num(total(r, 'tours'));
+  $('wDropped').textContent = `${num(nDrop)} (${pct(nDrop, picks + nDrop).toFixed(1)}%)`;
+  setRows('wReasons', Object.entries(drop).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => ['– ' + k, num(v)]));
+}
+
+function renderHero(r) {
+  const s = ref(), isRef = r.policy === 'static';
+  const feet = total(r, 'pick_feet'), disp = total(r, 'dispatch_feet_untimed'), hrs = total(r, 'sim_pick_seconds') / 3600;
+  $('hTitle').textContent = `Driving, ${pname(r.policy)}`;
+  $('hPick').textContent = num(feet) + ' ft';
+  $('hDisp').textContent = num(disp) + ' ft, untimed';
+  $('hHours').textContent = hrs.toFixed(1) + ' h';
+  $('hVs').hidden = isRef || !s;
+  if (isRef || !s) {
+    setBig('hBig', num(feet), 'ft pick to pick');
+    $('hNote').textContent = isRef ? `Current slotting ${periodText()}: the reference every method is compared with.`
+      : 'No static run in this bundle, so nothing to compare with.';
+  } else {
+    const sf = total(s, 'pick_feet'), saved = sf - feet, sh = total(s, 'sim_pick_seconds') / 3600;
+    const p = pct(saved, sf);
+    setBig('hBig', Math.abs(p).toFixed(1) + '%', saved >= 0 ? 'less driving' : 'more driving', saved > 0 ? 'good' : saved < 0 ? 'bad' : '');
+    $('hNote').textContent = `${num(Math.abs(saved))} ft of pick-to-pick driving ${saved >= 0 ? 'saved' : 'added'} against current slotting ${periodText()}, same tours.`;
+    $('vFeet').textContent = (saved >= 0 ? '−' : '+') + num(Math.abs(saved)) + ' ft';
+    $('vHours').textContent = (sh - hrs >= 0 ? '−' : '+') + Math.abs(sh - hrs).toFixed(1) + ' h';
+    $('vMove').textContent = fmt$(r.manifest.moves ? r.manifest.moves.cost : 0);
+  }
+  $('hModel').textContent = `Headline excludes the dispatch legs: drop-off is ${r.manifest.drop_off_mode}, so tour totals ` +
+    `with them are not citable. Pick hours come from leg-time model "${r.leg_time_model}".`;
+}
+
+function renderCheck(r) {
+  const c = r.manifest.leg_model_check || {}, p = c.primary_pick_to_pick_legs || {}, s = c.secondary_first_to_last_scan || {};
+  if (p.n_legs) {
+    setBig('kBig', p.mae_s.toFixed(1), 's mean abs. error');
+    setRows('kRows', [['Legs compared', num(p.n_legs)],
+      ['Mean error (sim − observed)', (p.mean_error_s >= 0 ? '+' : '−') + Math.abs(p.mean_error_s).toFixed(1) + ' s'],
+      ['Median leg, sim / observed', `${p.median_sim_s.toFixed(0)} / ${p.median_obs_s.toFixed(0)} s`],
+      ...(s.n_tours ? [['Scan span, median abs. error', (100 * s.median_abs_pct_error).toFixed(1) + '%'],
+                       ['Complete tours compared', num(s.n_tours)]] : [])]);
+    $('kNote').textContent = `Leg model "${c.leg_time_model}" against the observed pick-to-pick legs of the whole run. ` +
+      'Not a sim validation. Observed seconds are scan intervals, not a time study.';
+  } else {
+    setBig('kBig', '—');
+    setRows('kRows', s.n_tours ? [['Scan span, median abs. error', (100 * s.median_abs_pct_error).toFixed(1) + '%'],
+                                  ['Complete tours compared', num(s.n_tours)]] : []);
+    $('kNote').textContent = 'No comparable legs in the current-slotting run.';
+  }
+}
+
+// Cost: the notebook's cost model (RackSmart_final settings cell), applied to the sim's
+// pick-to-pick feet. Constants come from a notebook-method run in the bundle.
+function costModel() {
+  for (const x of st.runs) { const np = x.manifest.notebook_plan; if (np && np.notebook) return np.notebook.constants; }
+  return null;
+}
+function renderCost(r) {
+  const k = costModel(), s = ref(), isRef = r.policy === 'static';
+  $('cTitle').textContent = `Cost, ${pname(r.policy)}`;
+  if (!k) {
+    setBig('cBig', '—'); setRows('cRows', []); $('cModel').textContent = '';
+    $('cNote').textContent = 'No notebook method in this bundle, so there is no cost model to apply.';
+    return;
+  }
+  const perFt = k.WAGE / (k.MPH * 5280), whole = st.per === 'all';
+  const drive = total(r, 'pick_feet') * perFt, hrs = total(r, 'sim_pick_seconds') / 3600;
+  const move = (r.manifest.moves || {}).cost || 0;
+  if (isRef || !s) {
+    setBig('cBig', fmt$(drive), 'driving');
+    $('cNote').textContent = `Pick-to-pick driving ${periodText()}, at the notebook's rate. Static moves nothing.`;
+    setRows('cRows', [['Driving cost', fmt$(drive)], ['Move cost', fmt$(0)],
+                      [`Simulated pick hours × $${k.WAGE.toFixed(2)}/h`, fmt$(hrs * k.WAGE)]]);
+  } else {
+    const sDrive = total(s, 'pick_feet') * perFt, saved = sDrive - drive, net = whole ? saved - move : saved;
+    const sh = total(s, 'sim_pick_seconds') / 3600;
+    setBig('cBig', fmt$(Math.abs(net)),
+           net >= 0 ? (whole ? 'net saved' : 'saved') : (whole ? 'net lost' : 'added'),
+           net > 0 ? 'good' : net < 0 ? 'bad' : '');
+    // Payback: the one-time move cost over the driving saved per week, averaged over the
+    // whole simulated run (not the selected day).
+    const days = st.bundle.dates.length;
+    const weekSaved = (sum(s.daily.pick_feet) - sum(r.daily.pick_feet)) * perFt * 7 / days;
+    const pb = weekSaved > 0 ? move / weekSaved : null;
+    const pbText = move <= 0 ? 'no moves to pay back'
+      : pb == null ? 'never: this plan saves no driving'
+      : `${pb.toFixed(1)} weeks (${Math.ceil(pb * 7)} days)`;
+    $('cNote').textContent = (whole
+      ? `Driving saved against current slotting over the whole run (${st.bundle.dates.length} days), minus the plan's one-time move cost.`
+      : `Driving saved against current slotting ${periodText()}. The move cost is charged once, so it is netted only on the whole-run view.`)
+      + (pb != null && move > 0 ? ` The moves pay for themselves in ${pbText}.` : '');
+    setRows('cRows', [
+      ['Payback period', pbText],
+      ['Driving cost', fmt$(drive)], ['Current slotting driving cost', fmt$(sDrive)], ['Driving saved', fmt$(saved)],
+      ['Move cost (one time, whole plan)', fmt$(move)],
+      ...(whole ? [[`Net over the run (${st.bundle.dates.length} days)`, fmt$(saved - move)]] : []),
+      [`Simulated pick hours saved × $${k.WAGE.toFixed(2)}/h`, fmt$((sh - hrs) * k.WAGE)]]);
+  }
+  if (!isRef && s) $('cModel').textContent = "Payback uses the run's average driving saved per week. ";
+  else $('cModel').textContent = '';
+  $('cModel').textContent += `Notebook rates: $${k.WAGE.toFixed(2)}/h at ${k.MPH} mph ($${perFt.toFixed(4)}/ft), ` +
+    `$${k.COST_PER_CASE}/case moved. Dispatch legs left out, so this differs from the notebook's net. ` +
+    `Hours: leg model "${r.leg_time_model}".`;
+}
+
+function renderPlan(r) {
+  const np = r.manifest.notebook_plan;
+  if (!np) {
+    setBig('pBig', '0', 'moves');
+    $('pNote').textContent = 'Static never moves product: the slotting the site actually ran (2026-11-02).';
+    setRows('pRows', []); $('pGapsWrap').hidden = true; return;
+  }
+  const pl = np.plan, wr = np.workbook_replay || {};
+  setBig('pBig', num(pl.swaps), pl.swaps === 1 ? 'swap' : 'swaps');
+  $('pNote').textContent = `Planned once on ${np.planning_window.start} to ${np.planning_window.end}, ` +
+    `before the run, by ${np.label}.` + (pl.blocked_by_backtest_guard ? ' Blocked by the notebook\'s backtest guard.' : '');
+  setRows('pRows', [
+    ['Move cost ($0.17 per case)', fmt$(np.move_cost_usd)],
+    ['Cost test', pl.cost_test === false ? 'no' : 'yes'],
+    ['Backtest guard', 'blocked_by_backtest_guard' in pl ? (pl.blocked_by_backtest_guard ? 'blocked the plan' : 'passed') : 'not used'],
+    ['Notebook scoring, driving cut', (wr.walking_cut_pct ?? 0).toFixed(1) + '%'],
+    ['Notebook scoring, net', fmt$(wr.net_usd ?? 0)]]);
+  $('pNote').textContent += ' Notebook scoring counts the dispatch legs; the driving card does not, so the two cuts differ.';
+  $('pGapsWrap').hidden = false;
+  $('pGapsSum').textContent = `Known gaps (${np.known_gaps.length})`;
+  setRows('pGaps', np.known_gaps.map(g => [g, '']));
+}
+
+// ---------- floor map ----------
+// Colors and sizes come from style.css variables (--heat*, --map-*), read at draw time.
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const hex = c => [0, 2, 4].map(k => parseInt(c.replace('#', '').slice(k, k + 2), 16));
+let PAL = {}, G = null, scale = 1, cssW = 0, cssH = 0;
+const cv = $('floor'), cx = cv.getContext('2d');
+const mapOpt = { swaps: true, swapsAll: false, golden: true, labels: true };
+const SWAP_TOP = 30;   // swaps drawn by default: the ones moving the most picks
+
+function readPal() {
+  for (const k of ['--heat0', '--heat1', '--heat2', '--heat3', '--empty', '--floor', '--rack', '--tape', '--ink',
+                   '--muted', '--line', '--bad', '--display', '--body']) PAL[k] = css(k);
+  for (const k of ['--heat-p1', '--heat-p2', '--heat-floor', '--map-pad-in', '--map-rack-w-in', '--map-rack-h-in',
+                   '--map-aisle-in', '--map-golden-in', '--map-dispatch-px', '--map-stop-px', '--map-arrow-alpha',
+                   '--map-label-px-min', '--map-label-px-max']) PAL[k] = parseFloat(css(k));
+  PAL.stops = ['--heat0', '--heat1', '--heat2', '--heat3'].map(k => hex(PAL[k]));
+}
+function heat(t) {
+  const p = [0, PAL['--heat-p1'], PAL['--heat-p2'], 1];
+  t = Math.max(0, Math.min(1, t)); let k = 0; while (k < 2 && t > p[k + 1]) k++;
+  const u = (t - p[k]) / (p[k + 1] - p[k]), a = PAL.stops[k], b = PAL.stops[k + 1];
+  return `rgb(${a.map((v, j) => Math.round(v + (b[j] - v) * u)).join(',')})`;
+}
+
+function buildGeometry() {
+  const S = st.bundle.network.stops, pad = PAL['--map-pad-in'];
+  const xs = S.map(s => s.x), ys = S.map(s => s.y);
+  G = { x0: Math.min(...xs) - pad, x1: Math.max(...xs) + pad, y0: Math.min(...ys) - pad, y1: Math.max(...ys) + pad,
+        byId: Object.fromEntries(S.map(s => [s.id, s])), rack: S.filter(s => s.type === 'rack') };
+  // aisle paths: consecutive rack stops on one drawn x, one rack section (103") apart
+  const byX = {};
+  G.rack.forEach(s => (byX[Math.round(s.x)] = byX[Math.round(s.x)] || []).push(s));
+  G.segs = [];
+  Object.values(byX).forEach(a => { a.sort((p, q) => p.y - q.y);
+    for (let i = 1; i < a.length; i++) if (a[i].y - a[i - 1].y < 140) G.segs.push([a[i - 1], a[i]]); });
+  // aisle label: the front (topmost) rack stop carrying that aisle's faces
+  const top = {};
+  G.rack.forEach(s => { if (s.aisle && (!top[s.aisle] || s.y > top[s.aisle].y)) top[s.aisle] = s; });
+  G.labels = Object.entries(top);
+}
+const W2C = (x, y) => [(x - G.x0) * scale, (G.y1 - y) * scale];
+function sizeCanvas() {
+  const w = $('mapbox').clientWidth; cssW = w; scale = w / (G.x1 - G.x0); cssH = Math.round((G.y1 - G.y0) * scale);
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(cssH * dpr); cv.style.height = cssH + 'px';
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+function stopPicks(r) {
+  const [a, b] = span(), acc = {};
+  for (let i = a; i <= b; i++) for (const [k, v] of Object.entries(r.stop_picks[i] || {})) acc[k] = (acc[k] || 0) + v;
+  return acc;
+}
+function vmax() {        // one scale across every tab, so colors compare between policies
+  let m = 1;
+  [st.ref, ...st.runs].forEach(r => Object.values(stopPicks(r)).forEach(v => { if (v > m) m = v; }));
+  return m;
+}
+const usesGolden = r => !!(r.manifest.notebook_plan && r.manifest.notebook_plan.uses_golden_zone);
+
+function drawMap() {
+  if (!G) return;
+  const r = run(), picks = stopPicks(r), mx = vmax(), c = cx;
+  c.clearRect(0, 0, cssW, cssH); c.fillStyle = PAL['--floor']; c.fillRect(0, 0, cssW, cssH);
+  c.strokeStyle = PAL['--line']; c.lineWidth = Math.max(1, scale * PAL['--map-aisle-in']); c.lineCap = 'round';
+  G.segs.forEach(([a, b]) => { const [x1, y1] = W2C(a.x, a.y), [x2, y2] = W2C(b.x, b.y);
+    c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); });
+  const w = Math.max(3, PAL['--map-rack-w-in'] * scale), h = Math.max(2, PAL['--map-rack-h-in'] * scale);
+  const golden = new Set(mapOpt.golden && usesGolden(r) ? r.golden_stops : []);
+  G.rack.forEach(s => {
+    const [x, y] = W2C(s.x, s.y);
+    if (!s.faces) { c.fillStyle = PAL['--empty']; c.fillRect(x - w / 2, y - h / 2, w, h); return; }
+    const v = picks[s.id] || 0, f = PAL['--heat-floor'];
+    c.fillStyle = v ? heat(f + (1 - f) * Math.sqrt(v / mx)) : PAL['--heat0'];
+    c.fillRect(x - w / 2, y - h / 2, w, h);
+    if (golden.has(s.id)) { c.strokeStyle = PAL['--tape']; c.lineWidth = Math.max(1.2, scale * PAL['--map-golden-in']);
+      c.strokeRect(x - w / 2, y - h / 2, w, h); }
+  });
+  // dispatch, staging lanes, production lines
+  st.bundle.network.stops.forEach(s => {
+    if (s.type === 'rack' || s.type === 'junction') return;
+    const [x, y] = W2C(s.x, s.y), d = s.type === 'dispatch' ? PAL['--map-dispatch-px'] : PAL['--map-stop-px'];
+    c.fillStyle = s.type === 'dispatch' ? PAL['--bad'] : s.type === 'line' ? PAL['--rack'] : PAL['--tape'];
+    c.fillRect(x - d, y - d, 2 * d, 2 * d);
+  });
+  const fs = Math.max(PAL['--map-label-px-min'], Math.min(PAL['--map-label-px-max'], scale * 120));
+  c.font = `600 ${fs}px ${PAL['--display']}`; c.textBaseline = 'middle'; c.textAlign = 'left'; c.fillStyle = PAL['--ink'];
+  const ds = G.byId[st.bundle.network.dispatch];
+  if (ds) { const [x, y] = W2C(ds.x, ds.y); c.fillText('Dispatch', x + PAL['--map-dispatch-px'] + 4, y); }
+  if (mapOpt.labels) { c.fillStyle = PAL['--muted']; c.textAlign = 'center'; c.textBaseline = 'bottom';
+    G.labels.forEach(([a, s]) => { const [x, y] = W2C(s.x, s.y); c.fillText(a, x, y - h / 2 - 2); }); }
+  // swaps: a swap exchanges two products, so the line has a head at each end
+  if (mapOpt.swaps && r.swaps.length) {
+    c.strokeStyle = PAL['--ink']; c.fillStyle = PAL['--ink']; c.lineWidth = 1.2; c.globalAlpha = PAL['--map-arrow-alpha'];
+    const head = (ax, ay, bx, by) => { const g = Math.atan2(by - ay, bx - ax), k = 6; c.beginPath(); c.moveTo(bx, by);
+      c.lineTo(bx - k * Math.cos(g - .45), by - k * Math.sin(g - .45)); c.lineTo(bx - k * Math.cos(g + .45), by - k * Math.sin(g + .45));
+      c.closePath(); c.fill(); };
+    const shown = mapOpt.swapsAll ? r.swaps : [...r.swaps].sort((x, y) => y.picks - x.picks).slice(0, SWAP_TOP);
+    shown.forEach(sw => { const a = G.byId[sw.stop_a], b = G.byId[sw.stop_b]; if (!a || !b) return;
+      const [ax, ay] = W2C(a.x, a.y), [bx, by] = W2C(b.x, b.y);
+      c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke(); head(ax, ay, bx, by); head(bx, by, ax, ay); });
+    c.globalAlpha = 1;
+  }
+}
+
+function renderMap(r) {
+  $('mapTitle').textContent = `Picks by stop, ${pname(r.policy)}`;
+  $('mapWhen').textContent = st.per === 'day' ? dayName(st.day, { weekday: 'long', month: 'short', day: 'numeric' }) : 'Whole run';
+  const n = r.swaps.length, top = Math.min(n, SWAP_TOP);
+  $('swapsLabel').textContent = !n ? 'Swaps: this policy makes none' : n > SWAP_TOP && !mapOpt.swapsAll
+    ? `Show the ${top} swaps moving the most picks` : `Show this method's swaps (${n})`;
+  $('swapsOn').disabled = !n; $('swapsAll').disabled = !n || n <= SWAP_TOP;
+  $('swapsAllLabel').textContent = n > SWAP_TOP ? `Show all ${n} swaps` : 'Show all swaps';
+  const g = usesGolden(r);
+  $('goldenOn').disabled = !g;
+  $('goldenLabel').textContent = g ? 'Outline the golden zone (this method swaps into it)' : 'Golden zone: not used by this method';
+  drawMap();
+}
+
+// tooltip
+cv.addEventListener('mousemove', e => {
+  if (!G) return;
+  const rc = cv.getBoundingClientRect(), mx = e.clientX - rc.left, my = e.clientY - rc.top;
+  const wx = mx / scale + G.x0, wy = G.y1 - my / scale;
+  let hit = null, best = 1e9;
+  G.rack.forEach(s => { const dx = Math.abs(s.x - wx), dy = Math.abs(s.y - wy);
+    if (dx < 90 && dy < 55 && dx + dy < best) { best = dx + dy; hit = s; } });
+  const tip = $('tip');
+  if (!hit) { tip.style.display = 'none'; return; }
+  const r = run(), s = ref(), when = st.per === 'day' ? 'this day' : 'whole run';
+  const lines = [hit.faces ? `${hit.faces} case-pick face${hit.faces > 1 ? 's' : ''}` : 'No case-pick face'];
+  if (hit.faces) {
+    const n = stopPicks(r)[hit.id] || 0;
+    lines.push(`${num(n)} pick${n === 1 ? '' : 's'}, ${when}`);
+    if (s && r !== s) { const m = stopPicks(s)[hit.id] || 0; lines.push(`${num(m)} pick${m === 1 ? '' : 's'} under current slotting`); }
+  }
+  if (hit.ft_from_dispatch != null) lines.push(`${num(hit.ft_from_dispatch)} ft from dispatch`);
+  if (usesGolden(r) && r.golden_stops.includes(hit.id)) lines.push('In the golden zone');
+  r.swaps.filter(w => w.stop_a === hit.id || w.stop_b === hit.id)
+    .forEach(w => lines.push(`Swap: ${w.location_a} ↔ ${w.location_b}`));
+  tip.replaceChildren();
+  const b = document.createElement('b'); b.textContent = hit.aisle ? `Aisle ${hit.aisle}` : 'Rack stop'; tip.append(b);
+  lines.forEach(t => { const d = document.createElement('div'); d.textContent = t; tip.append(d); });
+  tip.style.display = 'block';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = mx + 14, y = my + 14; if (x + tw > cssW) x = mx - tw - 14; if (y + th > cssH) y = Math.max(0, my - th - 14);
+  tip.style.left = Math.max(0, x) + 'px'; tip.style.top = y + 'px';
+});
+cv.addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
+[['swapsOn', 'swaps'], ['swapsAll', 'swapsAll'], ['goldenOn', 'golden'], ['labelsOn', 'labels']].forEach(([id, k]) =>
+  $(id).addEventListener('change', e => { mapOpt[k] = e.target.checked; renderMap(run()); }));
+
+// ---------- side panel ----------
+function renderBars(r) {
+  $('barsTitle').textContent = `Pick-to-pick feet, by policy (${st.per === 'day' ? dayName(st.day) : 'whole run'})`;
+  const vals = [st.ref, ...st.runs].map(x => [x, total(x, 'pick_feet')]), mx = Math.max(...vals.map(v => v[1]), 1);
+  const box = $('bars'); box.replaceChildren();
+  vals.forEach(([x, v]) => {
+    const row = document.createElement('div'); row.className = 'bar' + (x === r ? ' on' : '');
+    const n = document.createElement('span'); n.textContent = x === st.ref ? 'Current slotting (reference)' : pname(x.policy);
+    const t = document.createElement('div'); t.className = 'track';
+    const i = document.createElement('i'); i.style.width = (100 * v / mx) + '%'; t.append(i);
+    const val = document.createElement('span'); val.textContent = (v / 1000).toFixed(1) + 'k ft';
+    row.append(n, t, val); box.append(row);
+  });
+}
+function renderAssumptions(r) {
+  const m = r.manifest, np = m.notebook_plan, k = np && np.notebook ? np.notebook.constants : null;
+  const file = p => (p || '').split(/[\\/]/).pop();
+  setRows('assume', [
+    ['Window', `${m.window.start} to ${m.window.end}`],
+    ['Scope', `${m.scope.zone} / ${m.scope.uom}, faces ${m.scope.slot_type}`],
+    ['Operators', `${m.operators} (not a finding)`],
+    ['Leg-time model', r.leg_time_model],
+    ['Trip start and end', 'dispatch board'],
+    ['Dispatch legs', m.dispatch_legs],
+    ['Drop-off', m.drop_off_mode],
+    ['Picks file', file(((m.inputs || [])[0] || {}).path)],
+    ...(np ? [['Planned on', `${np.planning_window.start} to ${np.planning_window.end}`],
+              ['Inventory snapshot', file(np.inventory_snapshot)]] : []),
+    ...(k ? [['Wage (notebook)', '$' + k.WAGE.toFixed(2) + '/h'], ['Travel speed (notebook)', k.MPH + ' mph'],
+             ['Move cost (notebook)', '$' + k.COST_PER_CASE + ' per case']] : []),
+  ]);
+}
+
+// ---------- timeline ----------
+// Bars, sizes and colors from style.css (--tl-*). Picking a day switches cards and map to that day.
+const svg = $('tl'), NS = 'http://www.w3.org/2000/svg', PL = 8, PR = 8, TOP = 8, BOT = 22;
+let playT = null;
+function el(n, a) { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); svg.append(e); return e; }
+const nDays = () => st.bundle.dates.length;
+const bw = () => (svg.clientWidth - PL - PR) / nDays();
+function drawTL(r) {
+  const W = svg.clientWidth || 800, H = parseFloat(css('--tl-height')), hgt = H - TOP - BOT;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.replaceChildren();
+  const picks = r.daily.picks, mx = Math.max(...picks, 1), wr = parseFloat(css('--tl-bar-width'));
+  for (let i = 0; i < nDays(); i++) {
+    const h = picks[i] / mx * hgt, sel = st.per === 'day' && i === st.day;
+    el('rect', { x: PL + i * bw() + bw() * (1 - wr) / 2, y: TOP + hgt - h, width: Math.max(1, bw() * wr), height: h,
+                 fill: sel ? css('--tl-selected') : css('--tl-bar'), opacity: sel ? 1 : css('--tl-bar-opacity') });
+    const t = el('text', { x: PL + i * bw() + bw() / 2, y: H - 3, fill: css('--muted'), 'font-size': 11,
+                           'font-family': css('--body'), 'text-anchor': 'middle' });
+    t.textContent = `${dayName(i, { weekday: 'short' })} ${dayName(i, { day: 'numeric' })}`;
+  }
+  if (r.swaps.length) el('rect', { x: PL + bw() * .2, y: H - BOT + 3, width: Math.max(2, bw() * .6), height: 5, fill: css('--tl-mark') });
+  $('tlMoveKey').hidden = !r.swaps.length;
+  $('day').max = nDays() - 1; $('day').value = st.day;
+  const last = nDays() - 1;
+  $('dateBig').textContent = st.per === 'day'
+    ? dayName(st.day, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+    : `Whole run: ${dayName(0, { month: 'short', day: 'numeric' })} to ${dayName(last, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+}
+function setDay(d) {
+  st.day = Math.max(0, Math.min(nDays() - 1, d)); st.per = 'day';
+  document.querySelectorAll('[data-per] button').forEach(x => x.setAttribute('aria-pressed', x.dataset.v === 'day'));
+  render();
+}
+const dayFromX = x => Math.floor((x - svg.getBoundingClientRect().left - PL) / bw());
+let drag = false;
+svg.addEventListener('pointerdown', e => { if (!st.bundle) return; drag = true; svg.setPointerCapture(e.pointerId); setDay(dayFromX(e.clientX)); });
+svg.addEventListener('pointermove', e => { if (drag && dayFromX(e.clientX) !== st.day) setDay(dayFromX(e.clientX)); });
+svg.addEventListener('pointerup', () => { drag = false; });
+$('day').addEventListener('input', e => setDay(+e.target.value));
+$('play').addEventListener('click', () => {
+  if (playT) { clearInterval(playT); playT = null; $('play').textContent = 'Play'; return; }
+  $('play').textContent = 'Pause';
+  setDay(st.per === 'day' && st.day < nDays() - 1 ? st.day : 0);
+  playT = setInterval(() => {
+    if (st.day >= nDays() - 1) { clearInterval(playT); playT = null; $('play').textContent = 'Play'; return; }
+    setDay(st.day + 1);
+  }, 700);
+});
+
+// ---------- affinity graph ----------
+// The graph exactly as src/affinity/affinity_graph.py computed it (positions, clusters).
+// Colors: --cat1..--cat8 in cluster order. Every cluster also carries its number on the
+// graph and a row in the table, so identity never rests on color alone.
+const ag = { cv: $('aff'), sel: null, hover: null, xy: [], idx: {}, w: 0, h: 0 };
+// Eight hues in fixed order; never cycled. A 9th+ cluster folds into muted 'other'
+// (still numbered on the graph and in the table).
+const catColor = i => (i < 8 ? css(`--cat${i + 1}`) : css('--muted'));
+function affSize() {
+  const w = $('affbox').clientWidth, h = Math.round(w * 3 / 4), dpr = window.devicePixelRatio || 1;
+  ag.w = w; ag.h = h; ag.cv.width = Math.round(w * dpr); ag.cv.height = Math.round(h * dpr);
+  ag.cv.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+  const A = st.bundle.affinity, xs = A.nodes.map(n => n.x), ys = A.nodes.map(n => n.y), pad = 24;
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const k = Math.min((w - 2 * pad) / (x1 - x0 || 1), (h - 2 * pad) / (y1 - y0 || 1));
+  const ox = (w - 2 * pad - (x1 - x0) * k) / 2, oy = (h - 2 * pad - (y1 - y0) * k) / 2;
+  ag.xy = A.nodes.map(n => [pad + ox + (n.x - x0) * k, pad + oy + (y1 - n.y) * k]);
+  ag.idx = Object.fromEntries(A.nodes.map((n, i) => [n.sku, i]));
+}
+function affDraw() {
+  const A = st.bundle.affinity, c = ag.cv.getContext('2d'), focus = ag.hover ?? ag.sel;
+  const dim = parseFloat(css('--graph-dim-alpha')), ea = parseFloat(css('--graph-edge-alpha'));
+  const r0 = parseFloat(css('--graph-node-px')), r1 = parseFloat(css('--graph-node-max-px'));
+  const omax = Math.max(...A.nodes.map(n => n.orders), 1);
+  c.clearRect(0, 0, ag.w, ag.h);
+  c.lineWidth = 0.6; c.strokeStyle = css('--muted');
+  A.edges.forEach(e => {
+    const a = ag.idx[e.a], b = ag.idx[e.b]; if (a == null || b == null) return;
+    const on = focus == null || (A.nodes[a].cluster === focus && A.nodes[b].cluster === focus);
+    c.globalAlpha = on ? ea : ea * dim; c.beginPath(); c.moveTo(...ag.xy[a]); c.lineTo(...ag.xy[b]); c.stroke();
+  });
+  A.nodes.forEach((n, i) => {
+    c.globalAlpha = focus == null || n.cluster === focus ? 1 : dim; c.fillStyle = catColor(n.cluster);
+    const r = r0 + (r1 - r0) * Math.sqrt(n.orders / omax);
+    c.beginPath(); c.arc(...ag.xy[i], r, 0, 2 * Math.PI); c.fill();
+    c.lineWidth = 1; c.strokeStyle = css('--panel2'); c.stroke();      // 1px surface ring between overlapping dots
+  });
+  // cluster numbers at each cluster's centre: ink text with a surface halo, never the series color
+  c.font = `700 ${css('--graph-label-px')}px ${css('--display')}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  A.clusters.forEach(cl => {
+    const pts = A.nodes.map((n, i) => (n.cluster === cl.id ? ag.xy[i] : null)).filter(Boolean);
+    if (!pts.length) return;
+    const x = pts.reduce((s, p) => s + p[0], 0) / pts.length, y = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+    c.globalAlpha = focus == null || focus === cl.id ? 1 : dim;
+    c.lineWidth = 4; c.strokeStyle = css('--panel2'); c.strokeText(String(cl.id), x, y);
+    c.fillStyle = css('--ink'); c.fillText(String(cl.id), x, y);
+  });
+  c.globalAlpha = 1;
+}
+function renderAffinity() {
+  const A = st.bundle.affinity;
+  $('affCard').hidden = !A;
+  if (!A) return;
+  affSize();
+  $('affWhen').textContent = `${A.clusters.length} clusters · ${num(A.nodes.length)} SKUs · ${num(A.edges.length)} strong links`;
+  const ul = $('affList'); ul.replaceChildren();
+  A.clusters.forEach(cl => {
+    const li = document.createElement('li'), b = document.createElement('button');
+    b.dataset.c = cl.id; b.setAttribute('aria-pressed', ag.sel === cl.id);
+    const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = catColor(cl.id);
+    const n = document.createElement('span'); n.className = 'num'; n.textContent = cl.id;
+    const nm = document.createElement('span'); nm.textContent = cl.name;
+    const v = document.createElement('span'); v.className = 'val'; v.textContent = `${cl.skus} SKUs · ${num(cl.pick_lines)} lines`;
+    b.append(sw, n, nm, v); li.append(b); ul.append(li);
+  });
+  const rs = [st.ref, ...st.runs].find(r => r.policy === 'racksmart');
+  const fc = rs && rs.manifest.notebook_plan ? rs.manifest.notebook_plan.inputs.faces_with_cluster : null;
+  $('affNote').textContent = `Products often on the same order: ${A.method.edges}, ${A.method.communities} ` +
+    `(resolution ${A.method.resolution}, seed ${A.method.seed}), modularity ${A.method.modularity}. ` +
+    'RackSmart uses these clusters as extra swap partners' +
+    (fc != null ? ` (${num(fc)} pick faces carry a cluster label in this run)` : '') +
+    '; ABC and family grouping do not. Dot size: orders. Hover or click a cluster to pick it out.';
+  affDraw();
+}
+$('affList').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  ag.sel = ag.sel === +b.dataset.c ? null : +b.dataset.c;
+  $('affList').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', +x.dataset.c === ag.sel));
+  affDraw();
+});
+$('affList').addEventListener('mouseover', e => { const b = e.target.closest('button'); if (b) { ag.hover = +b.dataset.c; affDraw(); } });
+$('affList').addEventListener('mouseleave', () => { ag.hover = null; affDraw(); });
+ag.cv.addEventListener('mousemove', e => {
+  const A = st.bundle && st.bundle.affinity; if (!A) return;
+  const rc = ag.cv.getBoundingClientRect(), mx = e.clientX - rc.left, my = e.clientY - rc.top;
+  let best = 64, hit = -1;
+  ag.xy.forEach(([x, y], i) => { const d = (x - mx) ** 2 + (y - my) ** 2; if (d < best) { best = d; hit = i; } });
+  const tip = $('affTip');
+  if (hit < 0) { tip.style.display = 'none'; return; }
+  const n = A.nodes[hit], cl = A.clusters.find(c => c.id === n.cluster);
+  const partners = A.edges.filter(x => x.a === n.sku || x.b === n.sku).sort((p, q) => q.jaccard - p.jaccard).slice(0, 3)
+    .map(x => { const o = A.nodes[ag.idx[x.a === n.sku ? x.b : x.a]]; return `${o.descr || o.sku} (${x.jaccard.toFixed(2)})`; });
+  tip.replaceChildren();
+  const b = document.createElement('b'); b.textContent = n.descr || n.sku; tip.append(b);
+  [`SKU ${n.sku}`, `Cluster ${n.cluster}: ${cl ? cl.name : ''}`, `${num(n.orders)} orders`,
+   ...(partners.length ? ['Strongest partners (Jaccard):', ...partners] : [])]
+    .forEach(t => { const d = document.createElement('div'); d.textContent = t; tip.append(d); });
+  tip.style.display = 'block';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = mx + 14, y = my + 14; if (x + tw > ag.w) x = mx - tw - 14; if (y + th > ag.h) y = Math.max(0, my - th - 14);
+  tip.style.left = Math.max(0, x) + 'px'; tip.style.top = y + 'px';
+});
+ag.cv.addEventListener('mouseleave', () => { $('affTip').style.display = 'none'; });
+
+// ---------- render ----------
+function render() {
+  const r = run();
+  renderWorkload(r); renderHero(r); renderCost(r); renderCheck(ref()); renderPlan(r);
+  renderMap(r); renderBars(r); renderAssumptions(r); drawTL(r);
+  const m = r.manifest;
+  $('foot').textContent =
+    `${pname(st.pol)}: run ${run().name}, commit ${m.git_sha ? m.git_sha.slice(0, 7) : 'unknown'}` +
+    `${m.git_dirty ? ' (uncommitted changes: not citable)' : ''}, config ${m.config_hash || 'unknown'}, ` +
+    `leg-time model ${run().leg_time_model}. Bundle made ${st.bundle.created_utc.slice(0, 16).replace('T', ' ')} UTC. ` +
+    'Queueing and operator-count results are not findings while dispatch legs are untimed (docs/decisions.md, 2026-11-02).';
+}
+
+new ResizeObserver(() => { if (G) { sizeCanvas(); drawMap(); drawTL(run()); } }).observe($('mapbox'));
+new ResizeObserver(() => { if (st.bundle && st.bundle.affinity) { affSize(); affDraw(); } }).observe($('affbox'));
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (G) { readPal(); drawMap(); drawTL(run()); renderAffinity(); } });
+window.RackSmartUI = { loadBundle, check, mapPoint: id => (G && G.byId[id] ? W2C(G.byId[id].x, G.byId[id].y) : null) };   // used by the screenshot/test harness
+</script>
+</body>
+</html>

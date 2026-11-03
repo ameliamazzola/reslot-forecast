@@ -195,3 +195,13 @@ plt.axis("off")
 plt.savefig(PROCESSED_DIR / "affinity_graph.png", dpi=200, bbox_inches="tight")
 plt.show()
 
+# %%
+# Same graph as data for the simulator UI (ui/index.html): H, clusters, pos and
+# summary exactly as computed above. See src/affinity/graph_export.py.
+import sys
+sys.path.insert(0, str(PROJECT_ROOT / "src" / "affinity"))
+from graph_export import write_graph_json
+
+out = write_graph_json(PROCESSED_DIR / "affinity_graph.json", H, clusters, pos, summary,
+                       min_jaccard=MIN_JACCARD, resolution=1.0, seed=42)
+print("wrote", out)

@@ -75,9 +75,13 @@ STRING_COLS = ["TYPE", "TRANS_TYPE", "USER_NAME", "FROM_ITEM", "FROM_LOCATION", 
 DEFAULT_TS_FORMAT = "%m/%d/%Y %I:%M:%S %p"
 
 
-def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT) -> pd.DataFrame:
+def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT, window=None) -> pd.DataFrame:
     """Read a yowmspd2 pick report or transactions export and return
-    canonical EVENTS, plus type_code (raw TYPE)."""
+    canonical EVENTS, plus type_code (raw TYPE).
+
+    window: optional (start, end) timestamps. Rows outside [start, end) are dropped
+    right after the timestamps are parsed, before the per-row work -- for reading
+    one month out of the 365-day pick reports."""
     path = Path(path)
     if path.suffix.lower() == ".parquet":
         raw = pd.read_parquet(path)
@@ -94,6 +98,8 @@ def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT) -> pd.D
     if bad:
         raise ValueError(f"{bad} timestamps did not parse as {ts_format!r}")
     df["ts"] = ts
+    if window is not None:
+        df = df[(df["ts"] >= window[0]) & (df["ts"] < window[1])].reset_index(drop=True)
 
     type_code = df["transaction_type"].astype("string")      # raw TYPE, kept as-is
     by_code = type_code.astype(object).map(EVENT_CLASS)
@@ -114,7 +120,11 @@ def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT) -> pd.D
     events = events[list(EVENTS)]
     events["type_code"] = type_code
 
-    locs = events["from_loc"].apply(parse_location).apply(pd.Series)
-    events[["from_aisle", "from_bay", "from_level"]] = locs[["aisle", "bay", "level"]]
+    if len(events):
+        locs = events["from_loc"].apply(parse_location).apply(pd.Series)
+        events[["from_aisle", "from_bay", "from_level"]] = locs[["aisle", "bay", "level"]]
+    else:                         # e.g. a window with no rows in this file
+        for c in ("from_aisle", "from_bay", "from_level"):
+            events[c] = pd.Series(dtype=object)
 
     return events.sort_values("ts").reset_index(drop=True)

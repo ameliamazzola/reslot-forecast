@@ -1,0 +1,77 @@
+# Simulation run (scripts/run_sim.py). Every knob that changes a result lives here.
+# Decisions: docs/decisions.md, 2026-11-02 entries.
+seed: 20261005             # recorded in the manifest; the static run draws no random numbers
+
+window:                    # inclusive days: everything after the planning month that the
+  start: "2026-09-21"      # transactions export covers (Sep 21 - Oct 15), with the plan applied
+  end: "2026-10-15"        # on Sep 21. Oct 15 may be a partial day (export runs "9.15 thru 10.15").
+
+operators: 6               # reference: median distinct case pickers per clock hour, Oct 5-11
+                           # (p90 9, max 12); swept later. Not a finding while dispatch legs are untimed.
+                           # Set from Oct 5-11; kept for the longer window.
+policy: static             # static = no re-slots; notebook methods (planned once, before the week,
+                           # from the racksmart: block): racksmart | classic_abc | abc_cost_test | family_grouping
+
+data:
+  # Converted transactions export (scripts/xlsx_convert.py output): pick-report
+  # columns plus TRANS_TYPE, read by io/wms_picks.load_wms_picks. Run on the real
+  # week by the team; development and tests use synthetic data only.
+  picks_path: data/raw/transactions_0915_1015.csv
+  ts_format: "%m/%d/%Y %I:%M:%S %p"
+
+scope:                     # v1 workload: case picks only; pallet picks (PL) are out of scope
+  event_class: pick
+  zone: WZPCK
+  uom: CS
+  slot_type: F             # location master TYPE: F = pick face, R = reserve
+
+tour:
+  group_keys: [order_id, user_id]   # one operator working one order; every tour is simulated
+
+leg_time:
+  # Pluggable: the engine calls LegTimeModel.predict(leg) -> seconds and nothing else.
+  # network_feet = the 2026-09-14 model refit on network feet (scripts/refit_travel_feet.py,
+  # branch travel/refit-feet). It loads ONLY if that run's 2026-11-02 review outcome is
+  # "adopted" and it was fitted on this travel network; otherwise run_sim.py refuses.
+  model: network_feet
+  calibration_manifest: runs/travel_ft_seed20260914/manifest.json   # coefficients + review outcome
+  cost_table: data/processed/travel/travel_cost_ft.csv              # fitted distance curve
+
+travel:
+  dir: data/processed/travel           # build_travel_network.py outputs: stop_distance_ft.csv,
+                                       # location_stop_crosswalk.csv
+
+trip_ends:                 # 2026-11-02 dispatch-legs entry; v1 accepts only these values
+  start_stop: D_183183.9_5933.3        # Stop_Dispatch
+  end_stop: D_183183.9_5933.3          # back to dispatch: case picks can't be tied to a lane
+  dispatch_legs: untimed               # feet only; operator busy from first to last pick scan
+  drop_off_mode: provisional
+
+leg_model_check:
+  # Out-of-time check of the leg model on this window -- NOT a sim validation.
+  # Primary: simulated vs observed pick-to-pick leg seconds (first/last legs excluded).
+  # Secondary: first-to-last scan span, measured the same way on both sides.
+  # These filters apply to the check's statistics only, never to what is simulated,
+  # and match the calibration's (configs/travel.yaml trip.min_picks, legs.*_seconds).
+  min_picks: 3
+  leg_min_seconds: 1
+  leg_max_seconds: 900
+
+racksmart:
+  # Planning inputs shared by every notebook method (policy: racksmart, classic_abc,
+  # abc_cost_test, family_grouping) and scripts/plan_policies.py. The algorithms and their
+  # cost model (WAGE, MPH, COST_PER_CASE, DEMAND_SCALE, COST_MULT) are the notebook's,
+  # run unchanged; nothing here re-tunes them.
+  notebook: notebooks/RackSmart_final.ipynb
+  planning_window:                     # the month before Sep 21 (inclusive days)
+    start: "2026-08-21"
+    end: "2026-09-20"
+  planning_picks:                      # 365-day pick report, both parts (deduplicated by NO)
+    - data/raw/yowmspd2__picks_past_365days_ranon9.21.26.csv
+    - data/raw/yowmspd2_archive_picks_past_365days_ranon9.21.26.csv
+  planning_ts_format: "%m/%d/%Y %I:%M:%S %p"
+  inventory_path: "data/raw/York Inventory On Hand 10.20.26 1PM_EST 1.csv"   # snapshot 2026-10-20
+  clusters_path: data/processed/sku_clusters.csv                             # null = no clusters
+
+paths:
+  runs: runs

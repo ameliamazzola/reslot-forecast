@@ -127,6 +127,19 @@ def test_wms_picks_keeps_string_ids(raw_picks_csv):
     assert "00123" in set(ev["item_id"])
 
 
+def test_wms_picks_can_read_one_window_only(raw_picks_csv):
+    """The three rows are Aug 16 (x2) and Aug 31; a window around Aug 31 keeps one."""
+    ev = load_wms_picks(raw_picks_csv, window=(pd.Timestamp("2026-08-20"), pd.Timestamp("2026-09-20")))
+    assert len(ev) == 1 and ev.loc[0, "from_loc"] == "JJ119E"
+    validate(ev, EVENTS, "events", strict=False)
+
+
+def test_wms_picks_window_with_no_rows_gives_an_empty_table(raw_picks_csv):
+    """One of the 365-day files can have nothing in the planning month."""
+    ev = load_wms_picks(raw_picks_csv, window=(pd.Timestamp("2026-10-01"), pd.Timestamp("2026-11-01")))
+    assert len(ev) == 0 and {"from_aisle", "from_bay", "from_level", "type_code"} <= set(ev.columns)
+
+
 def test_wms_picks_rejects_wrong_ts_format(raw_picks_csv):
     with pytest.raises(ValueError, match="did not parse"):
         load_wms_picks(raw_picks_csv, ts_format="%Y-%m-%d %H:%M:%S")
