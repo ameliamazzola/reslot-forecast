@@ -69,7 +69,7 @@
           <div id="hVs">
             <h3>Compared with current slotting</h3>
             <ul class="rows">
-              <li><span>Pick-to-pick feet</span><span id="vFeet">—</span></li>
+              <li><span>Pick-to-pick feet (no dispatch legs)</span><span id="vFeet">—</span></li>
               <li><span>Simulated pick hours</span><span id="vHours">—</span></li>
               <li><span>Move cost, whole plan</span><span id="vMove">—</span></li>
             </ul>
@@ -106,6 +106,7 @@
           <span>Fewer</span><span class="ramp"></span><span>More picks</span>
           <span style="margin-left:12px">Each block is one rack stop (both faces of a 103" section). Grey blocks have no case-pick face. Same color scale on every tab. Hover for detail.</span>
         </div>
+        <p class="note" id="goldenRefNote" hidden></p>
       </div>
       <aside class="side">
         <div class="card">
@@ -302,14 +303,22 @@ function renderHero(r) {
   } else {
     const sf = total(s, 'pick_feet'), saved = sf - feet, sh = total(s, 'sim_pick_seconds') / 3600;
     const p = pct(saved, sf);
-    setBig('hBig', Math.abs(p).toFixed(1) + '%', saved >= 0 ? 'less driving' : 'more driving', saved > 0 ? 'good' : saved < 0 ? 'bad' : '');
-    $('hNote').textContent = `${num(Math.abs(saved))} ft of pick-to-pick driving ${saved >= 0 ? 'saved' : 'added'} against current slotting ${periodText()}, same tours.`;
+    // Headline: the notebook's driving cut (workbook_replay, whole run, dispatch trips
+    // included), on the same basis as the cost headline. Pick-to-pick stays as a row.
+    const wr = (r.manifest.notebook_plan || {}).workbook_replay || {}, cut = wr.walking_cut_pct ?? 0;
+    setBig('hBig', Math.abs(cut).toFixed(1) + '%', cut >= 0 ? 'less driving' : 'more driving', cut > 0 ? 'good' : cut < 0 ? 'bad' : '');
+    $('hNote').textContent = `Notebook scoring over the whole run (${st.bundle.dates.length} days, ${num(wr.tours || 0)} tours), ` +
+      `trips to and from dispatch included. Pick to pick only, ${st.per === 'day' ? 'this day' : 'whole run'}: ` +
+      `${Math.abs(p).toFixed(1)}% ${saved >= 0 ? 'less' : 'more'} driving.`;
     $('vFeet').textContent = (saved >= 0 ? '−' : '+') + num(Math.abs(saved)) + ' ft';
     $('vHours').textContent = (sh - hrs >= 0 ? '−' : '+') + Math.abs(sh - hrs).toFixed(1) + ' h';
     $('vMove').textContent = fmt$(r.manifest.moves ? r.manifest.moves.cost : 0);
   }
-  $('hModel').textContent = `Headline excludes the dispatch legs: drop-off is ${r.manifest.drop_off_mode}, so tour totals ` +
-    `with them are not citable. Pick hours come from leg-time model "${r.leg_time_model}".`;
+  $('hModel').textContent = (isRef || !s
+      ? `Pick to pick only: the dispatch legs are left out (drop-off ${r.manifest.drop_off_mode}). `
+      : `Headline: the notebook’s scoring, which counts the trips to and from dispatch; drop-off is ` +
+        `${r.manifest.drop_off_mode}, so it is not citable under the 2026-11-02 dispatch-legs decision. `) +
+    `Pick hours come from leg-time model "${r.leg_time_model}".`;
 }
 
 function renderCheck(r) {
@@ -354,35 +363,42 @@ function renderCost(r) {
     setRows('cRows', [['Driving cost', fmt$(drive)], ['Move cost', fmt$(0)],
                       [`Simulated pick hours × $${k.WAGE.toFixed(2)}/h`, fmt$(hrs * k.WAGE)]]);
   } else {
-    const sDrive = total(s, 'pick_feet') * perFt, saved = sDrive - drive, net = whole ? saved - move : saved;
-    const sh = total(s, 'sim_pick_seconds') / 3600;
-    setBig('cBig', fmt$(Math.abs(net)),
-           net >= 0 ? (whole ? 'net saved' : 'saved') : (whole ? 'net lost' : 'added'),
-           net > 0 ? 'good' : net < 0 ? 'bad' : '');
-    // Payback: the one-time move cost over the driving saved per week, averaged over the
-    // whole simulated run (not the selected day).
+    // Headline: the notebook's own net (workbook_replay, RackSmart_final.ipynb's replay and
+    // cost model) over the whole run -- driving saved on the run's tours, trips to and from
+    // dispatch included, minus the plan's one-time move cost. Whole run only: the notebook
+    // scores the run, not single days.
     const days = st.bundle.dates.length;
-    const weekSaved = (sum(s.daily.pick_feet) - sum(r.daily.pick_feet)) * perFt * 7 / days;
-    const pb = weekSaved > 0 ? move / weekSaved : null;
+    const wr = (r.manifest.notebook_plan || {}).workbook_replay || {};
+    const nbNet = wr.net_usd ?? 0, nbGross = wr.gross_usd ?? 0;
+    setBig('cBig', fmt$(Math.abs(nbNet)), nbNet >= 0 ? 'net saved' : 'net lost',
+           nbNet > 0 ? 'good' : nbNet < 0 ? 'bad' : '');
+    // Payback on the same basis: move cost over the notebook's driving saved per week.
+    const nbWeek = nbGross * 7 / days;
+    const pb = nbWeek > 0 ? move / nbWeek : null;
     const pbText = move <= 0 ? 'no moves to pay back'
       : pb == null ? 'never: this plan saves no driving'
       : `${pb.toFixed(1)} weeks (${Math.ceil(pb * 7)} days)`;
-    $('cNote').textContent = (whole
-      ? `Driving saved against current slotting over the whole run (${st.bundle.dates.length} days), minus the plan's one-time move cost.`
-      : `Driving saved against current slotting ${periodText()}. The move cost is charged once, so it is netted only on the whole-run view.`)
-      + (pb != null && move > 0 ? ` The moves pay for themselves in ${pbText}.` : '');
+    $('cNote').textContent = `Notebook scoring over the whole run (${days} days, ${num(wr.tours || 0)} tours): driving saved ` +
+      "against current slotting, trips to and from dispatch included, minus the plan's one-time move cost." +
+      (pb != null && move > 0 ? ` The moves pay for themselves in ${pbText}.` : '');
+    // Secondary: pick-to-pick driving only (dispatch legs left out), for the selected period.
+    const sDrive = total(s, 'pick_feet') * perFt, saved = sDrive - drive;
+    const sh = total(s, 'sim_pick_seconds') / 3600;
     setRows('cRows', [
       ['Payback period', pbText],
-      ['Driving cost', fmt$(drive)], ['Current slotting driving cost', fmt$(sDrive)], ['Driving saved', fmt$(saved)],
+      ['Notebook: driving saved', fmt$(nbGross)],
       ['Move cost (one time, whole plan)', fmt$(move)],
-      ...(whole ? [[`Net over the run (${st.bundle.dates.length} days)`, fmt$(saved - move)]] : []),
+      ['Notebook: net over the run', fmt$(nbNet)],
+      [`Pick-to-pick only, ${st.per === 'day' ? 'this day' : 'whole run'}: driving saved`, fmt$(saved)],
+      ...(whole ? [['Pick-to-pick only: net over the run', fmt$(saved - move)]] : []),
       [`Simulated pick hours saved × $${k.WAGE.toFixed(2)}/h`, fmt$((sh - hrs) * k.WAGE)]]);
   }
-  if (!isRef && s) $('cModel').textContent = "Payback uses the run's average driving saved per week. ";
+  if (!isRef && s) $('cModel').textContent = 'Headline and payback: the notebook’s scoring (whole run). It counts the trips ' +
+    'to and from dispatch, which use the provisional drop-off, so it is not citable under the 2026-11-02 dispatch-legs ' +
+    'decision; the pick-to-pick rows leave them out. ';
   else $('cModel').textContent = '';
   $('cModel').textContent += `Notebook rates: $${k.WAGE.toFixed(2)}/h at ${k.MPH} mph ($${perFt.toFixed(4)}/ft), ` +
-    `$${k.COST_PER_CASE}/case moved. Dispatch legs left out, so this differs from the notebook's net. ` +
-    `Hours: leg model "${r.leg_time_model}".`;
+    `$${k.COST_PER_CASE}/case moved. Hours: leg model "${r.leg_time_model}".`;
 }
 
 function renderPlan(r) {
@@ -402,7 +418,6 @@ function renderPlan(r) {
     ['Backtest guard', 'blocked_by_backtest_guard' in pl ? (pl.blocked_by_backtest_guard ? 'blocked the plan' : 'passed') : 'not used'],
     ['Notebook scoring, driving cut', (wr.walking_cut_pct ?? 0).toFixed(1) + '%'],
     ['Notebook scoring, net', fmt$(wr.net_usd ?? 0)]]);
-  $('pNote').textContent += ' Notebook scoring counts the dispatch legs; the driving card does not, so the two cuts differ.';
   $('pGapsWrap').hidden = false;
   $('pGapsSum').textContent = `Known gaps (${np.known_gaps.length})`;
   setRows('pGaps', np.known_gaps.map(g => [g, '']));
@@ -414,15 +429,18 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const hex = c => [0, 2, 4].map(k => parseInt(c.replace('#', '').slice(k, k + 2), 16));
 let PAL = {}, G = null, scale = 1, cssW = 0, cssH = 0;
 const cv = $('floor'), cx = cv.getContext('2d');
-const mapOpt = { swaps: true, swapsAll: false, golden: true, labels: true };
+// golden: remembered per tab type -- 'own' (the method swaps into the zone) and
+// 'ref' (another method's zone shown for reference); not one global switch.
+const mapOpt = { swaps: true, swapsAll: false, golden: { own: true, ref: false }, labels: true };
 const SWAP_TOP = 30;   // swaps drawn by default: the ones moving the most picks
 
 function readPal() {
   for (const k of ['--heat0', '--heat1', '--heat2', '--heat3', '--empty', '--floor', '--rack', '--tape', '--ink',
+                   '--map-golden-ref',
                    '--muted', '--line', '--bad', '--display', '--body']) PAL[k] = css(k);
   for (const k of ['--heat-p1', '--heat-p2', '--heat-floor', '--map-pad-in', '--map-rack-w-in', '--map-rack-h-in',
                    '--map-aisle-in', '--map-golden-in', '--map-dispatch-px', '--map-stop-px', '--map-arrow-alpha',
-                   '--map-label-px-min', '--map-label-px-max']) PAL[k] = parseFloat(css(k));
+                   '--map-label-px-min', '--map-label-px-max', '--map-golden-dash-px']) PAL[k] = parseFloat(css(k));
   PAL.stops = ['--heat0', '--heat1', '--heat2', '--heat3'].map(k => hex(PAL[k]));
 }
 function heat(t) {
@@ -466,6 +484,14 @@ function vmax() {        // one scale across every tab, so colors compare betwee
   return m;
 }
 const usesGolden = r => !!(r.manifest.notebook_plan && r.manifest.notebook_plan.uses_golden_zone);
+// The golden zone of the first run whose method swaps into one (ABC), to show for reference
+// on tabs whose method doesn't use it. Display only: the run data is not changed.
+function goldenRef() {
+  const g = st.bundle.runs.find(x => usesGolden(x));
+  return g ? { stops: g.golden_stops, policy: g.policy } : null;
+}
+// 'own': this tab's method swaps into its zone; 'ref': show goldenRef() dashed; null: no zone at all
+const goldenMode = r => (usesGolden(r) ? 'own' : goldenRef() ? 'ref' : null);
 
 function drawMap() {
   if (!G) return;
@@ -475,15 +501,20 @@ function drawMap() {
   G.segs.forEach(([a, b]) => { const [x1, y1] = W2C(a.x, a.y), [x2, y2] = W2C(b.x, b.y);
     c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); });
   const w = Math.max(3, PAL['--map-rack-w-in'] * scale), h = Math.max(2, PAL['--map-rack-h-in'] * scale);
-  const golden = new Set(mapOpt.golden && usesGolden(r) ? r.golden_stops : []);
+  const gm = goldenMode(r);
+  const golden = new Set(gm && mapOpt.golden[gm] ? (gm === 'own' ? r.golden_stops : goldenRef().stops) : []);
+  const dash = gm === 'ref' ? [PAL['--map-golden-dash-px'], PAL['--map-golden-dash-px'] * 0.75] : [];
   G.rack.forEach(s => {
     const [x, y] = W2C(s.x, s.y);
     if (!s.faces) { c.fillStyle = PAL['--empty']; c.fillRect(x - w / 2, y - h / 2, w, h); return; }
     const v = picks[s.id] || 0, f = PAL['--heat-floor'];
     c.fillStyle = v ? heat(f + (1 - f) * Math.sqrt(v / mx)) : PAL['--heat0'];
     c.fillRect(x - w / 2, y - h / 2, w, h);
-    if (golden.has(s.id)) { c.strokeStyle = PAL['--tape']; c.lineWidth = Math.max(1.2, scale * PAL['--map-golden-in']);
-      c.strokeRect(x - w / 2, y - h / 2, w, h); }
+    if (golden.has(s.id)) {      // solid: this method's zone; dashed: another method's, for reference
+      c.strokeStyle = gm === 'own' ? PAL['--tape'] : PAL['--map-golden-ref'];
+      c.lineWidth = Math.max(1.2, scale * PAL['--map-golden-in']);
+      c.setLineDash(dash); c.strokeRect(x - w / 2, y - h / 2, w, h); c.setLineDash([]);
+    }
   });
   // dispatch, staging lanes, production lines
   st.bundle.network.stops.forEach(s => {
@@ -520,9 +551,15 @@ function renderMap(r) {
     ? `Show the ${top} swaps moving the most picks` : `Show this method's swaps (${n})`;
   $('swapsOn').disabled = !n; $('swapsAll').disabled = !n || n <= SWAP_TOP;
   $('swapsAllLabel').textContent = n > SWAP_TOP ? `Show all ${n} swaps` : 'Show all swaps';
-  const g = usesGolden(r);
-  $('goldenOn').disabled = !g;
-  $('goldenLabel').textContent = g ? 'Outline the golden zone (this method swaps into it)' : 'Golden zone: not used by this method';
+  const gm = goldenMode(r), gr = goldenRef();
+  $('goldenOn').disabled = !gm;
+  if (gm) $('goldenOn').checked = mapOpt.golden[gm];
+  $('goldenLabel').textContent = gm === 'own' ? 'Outline the golden zone (this method swaps into it)'
+    : gm === 'ref' ? `Show ${pname(gr.policy)}'s golden zone for reference (not used by this method)`
+    : 'Golden zone: not used by this method';
+  $('goldenRefNote').hidden = !(gm === 'ref' && mapOpt.golden.ref);
+  $('goldenRefNote').textContent = gm === 'ref' ? `Dashed: golden zone from ${pname(gr.policy)}. This method optimizes `
+    + 'aisle changes per trip, not distance to dispatch (decisions.md 2026-09-14).' : '';
   drawMap();
 }
 
@@ -544,7 +581,9 @@ cv.addEventListener('mousemove', e => {
     if (s && r !== s) { const m = stopPicks(s)[hit.id] || 0; lines.push(`${num(m)} pick${m === 1 ? '' : 's'} under current slotting`); }
   }
   if (hit.ft_from_dispatch != null) lines.push(`${num(hit.ft_from_dispatch)} ft from dispatch`);
-  if (usesGolden(r) && r.golden_stops.includes(hit.id)) lines.push('In the golden zone');
+  const gmt = goldenMode(r);
+  if (gmt === 'own' && r.golden_stops.includes(hit.id)) lines.push('In the golden zone');
+  else if (gmt === 'ref' && goldenRef().stops.includes(hit.id)) lines.push(`In ${pname(goldenRef().policy)}'s golden zone (reference)`);
   r.swaps.filter(w => w.stop_a === hit.id || w.stop_b === hit.id)
     .forEach(w => lines.push(`Swap: ${w.location_a} ↔ ${w.location_b}`));
   tip.replaceChildren();
@@ -556,8 +595,11 @@ cv.addEventListener('mousemove', e => {
   tip.style.left = Math.max(0, x) + 'px'; tip.style.top = y + 'px';
 });
 cv.addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
-[['swapsOn', 'swaps'], ['swapsAll', 'swapsAll'], ['goldenOn', 'golden'], ['labelsOn', 'labels']].forEach(([id, k]) =>
+[['swapsOn', 'swaps'], ['swapsAll', 'swapsAll'], ['labelsOn', 'labels']].forEach(([id, k]) =>
   $(id).addEventListener('change', e => { mapOpt[k] = e.target.checked; renderMap(run()); }));
+$('goldenOn').addEventListener('change', e => {            // remembered for this tab type only
+  const gm = goldenMode(run()); if (gm) mapOpt.golden[gm] = e.target.checked; renderMap(run());
+});
 
 // ---------- side panel ----------
 function renderBars(r) {

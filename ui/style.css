@@ -80,6 +80,9 @@
   --map-rack-h-in: 92;        /* rack stop block height               */
   --map-aisle-in: 30;         /* aisle path stroke                    */
   --map-golden-in: 14;        /* golden-zone outline stroke           */
+  --map-golden-ref: #3A4047;  /* golden zone shown for reference on a tab whose method
+                                 doesn't use it (dashed); not --tape, which also marks lanes */
+  --map-golden-dash-px: 4;    /* dash of that reference outline (px); gap = 0.75 x dash */
   --map-dispatch-px: 5;       /* dispatch marker half-size (px)       */
   --map-stop-px: 3;           /* lane / line marker half-size (px)    */
   --map-arrow-alpha: 0.6;     /* swap arrows                          */
@@ -107,6 +110,7 @@
     --heat0: #2A333C;  --heat1: #3F6C99;  --heat2: #E0AE2A;  --heat3: #E0563F;  --empty: #262C31;  --floor: #1A1E21;
     --cat1: #3987e5;  --cat2: #d95926;  --cat3: #199e70;  --cat4: #c98500;
     --cat5: #d55181;  --cat6: #008300;  --cat7: #9085e9;  --cat8: #e66767;
+    --map-golden-ref: #C9CED2;
   }
 }
 :root[data-theme="dark"] {
@@ -116,6 +120,7 @@
   --heat0: #2A333C;  --heat1: #3F6C99;  --heat2: #E0AE2A;  --heat3: #E0563F;  --empty: #262C31;  --floor: #1A1E21;
     --cat1: #3987e5;  --cat2: #d95926;  --cat3: #199e70;  --cat4: #c98500;
     --cat5: #d55181;  --cat6: #008300;  --cat7: #9085e9;  --cat8: #e66767;
+    --map-golden-ref: #C9CED2;
 }
 
 /* --------------------------------------------------------------------------
