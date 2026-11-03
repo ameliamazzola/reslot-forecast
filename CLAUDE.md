@@ -63,7 +63,7 @@ Raw C&D data, everything in `data/interim/` and `data/processed/`, `runs/`, and 
 
 # RackSmart project context
 @Background.md
-@decisions.md
+@docs/decisions.md
 
 ## Rules for this repo
 - Reuse travel/network.py and travel/crosswalk.py for all travel; never write new distance math
