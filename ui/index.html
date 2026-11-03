@@ -315,9 +315,7 @@ function renderHero(r) {
     $('vMove').textContent = fmt$(r.manifest.moves ? r.manifest.moves.cost : 0);
   }
   $('hModel').textContent = (isRef || !s
-      ? `Pick to pick only: the dispatch legs are left out (drop-off ${r.manifest.drop_off_mode}). `
-      : `Headline: the notebook’s scoring, which counts the trips to and from dispatch; drop-off is ` +
-        `${r.manifest.drop_off_mode}, so it is not citable under the 2026-11-02 dispatch-legs decision. `) +
+      ? `Pick to pick only: the dispatch legs are left out (drop-off ${r.manifest.drop_off_mode}). ` : '') +
     `Pick hours come from leg-time model "${r.leg_time_model}".`;
 }
 
@@ -393,11 +391,7 @@ function renderCost(r) {
       ...(whole ? [['Pick-to-pick only: net over the run', fmt$(saved - move)]] : []),
       [`Simulated pick hours saved × $${k.WAGE.toFixed(2)}/h`, fmt$((sh - hrs) * k.WAGE)]]);
   }
-  if (!isRef && s) $('cModel').textContent = 'Headline and payback: the notebook’s scoring (whole run). It counts the trips ' +
-    'to and from dispatch, which use the provisional drop-off, so it is not citable under the 2026-11-02 dispatch-legs ' +
-    'decision; the pick-to-pick rows leave them out. ';
-  else $('cModel').textContent = '';
-  $('cModel').textContent += `Notebook rates: $${k.WAGE.toFixed(2)}/h at ${k.MPH} mph ($${perFt.toFixed(4)}/ft), ` +
+  $('cModel').textContent = `Notebook rates: $${k.WAGE.toFixed(2)}/h at ${k.MPH} mph ($${perFt.toFixed(4)}/ft), ` +
     `$${k.COST_PER_CASE}/case moved. Hours: leg model "${r.leg_time_model}".`;
 }
 
