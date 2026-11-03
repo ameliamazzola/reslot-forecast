@@ -257,3 +257,30 @@ GG/HH partial pallets. PY/PZ is a hard constraint for re-slotting.
 - Affinity measured by order co-occurrence; demand measured in pick lines.
 - Anticipatory candidate rule: change_flag = "up" AND demand_group in {Steady, Variable}.
 - New SKUs (< 28 days history) have no forecast; need a placement rule.   
+
+2026-11-02 — Static policy means no re-slots
+Decision. "Static" runs the week on the location master's slotting as-is, with no moves during the run. The notebook's one-time start-of-week swap is a separate policy (one_shot), not static.
+
+Why. Static is current practice, so it doubles as validation: replaying the real week through the as-is layout should roughly reproduce observed pick times. If it doesn't, the sim is wrong before any policy comparison counts. Folding a swap into static would remove that check and mix two things together.
+
+Consequence. one_shot is charged the forklift time for its relocation moves, the same as reactive ABC pays for its moves. A policy that re-slots for free is not a fair comparison.
+
+Reverses if. The team agrees a different "current practice" definition (e.g. the site's own periodic re-slot cadence) once C&D describes it.
+
+2026-11-02 — First sim run uses the last full week of the 30-day extract
+Decision. Mon Oct 5 – Sun Oct 11, 2026. Start and end dates live in the YAML config and are written to every manifest, never hard-coded.
+
+Why. Most recent full week, so it is the week most likely to match the location master snapshot (the master shows where things sat when exported, not historically). A full Mon–Sun week captures the weekly cycle.
+
+Consequence. Picks that don't map to a stop are dropped and the count is logged per run (CS coverage ~97.2%; X/Y bays 157–184 still check_snap). Results for this week are a validation baseline, not a policy finding; rankings need multiple weeks.
+
+Reverses if. The location master snapshot date turns out to be far from Oct 5–11, or the site flags that week as abnormal (outage, inventory count, unusual staffing).
+
+2026-11-02 — Operator count is a config value, first set from the data
+Decision. operators is a fixed number in the YAML config. For the validation run it is set to the observed count for the week: [N] distinct operator IDs active per shift, from [field name] in the 30-day extract. After validation it becomes a swept parameter.
+
+Why. Matching observed staffing makes simulated and observed results comparable. Reading it from the data at runtime would tie the sim to one week and remove the what-if lever the October feedback asked for (changeable operator count).
+
+Consequence. One number for the whole week is coarse; staffing differs by shift. Accept for the first loop.
+
+Reverses if. Validation error traces to shift-to-shift staffing differences; then replace the single value with a per-shift schedule in config.
