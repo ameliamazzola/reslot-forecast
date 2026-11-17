@@ -321,3 +321,21 @@ Decision. Replay Sep 21 – Oct 15, 2026 (25 days; Oct 15 may be partial), with 
 Why. One week set the full one-time move cost against one week of savings, so every plan looked like a loss even when it paid back in under two weeks. Replaying all the post-planning data the transactions export covers gives a simulated net over 3.5 weeks instead of a projection, and is closer to the notebook's monthly evaluation.
 Consequence. Still one plan per method, applied once; no re-planning during the run. The leg-model check covers the same 25 days, still after the Aug 15–Sep 14 fit, so it remains out of time. The affinity clusters overlap the run by one day (Sep 21). The operator reference value (6) was measured on Oct 5–11.
 Reverses if. A later transactions export allows a full month after the planning window, or the team moves to monthly re-planning as in the notebook.
+
+2026-11-16 — Planning inputs end at the run start; named exceptions only
+Decision. The notebook methods plan on: (1) every face the structure allows (crosswalk ok, WZPCK/F, stop in the distance table), not the faces picked in any window; (2) the item at each face = the last one picked there before Sep 21; (3) affinity clusters built from picks before Sep 21 (cutoff recorded in sku_clusters_meta.json); (4) case counts from the Oct 20 on-hand snapshot. Item (4) is the only input allowed past the run start; it is named in lookahead_exceptions, and the engine refuses any other planning input that ends after the start.
+
+Why. Two leaks let the plan see the run it was scored on: (a) the candidate face set included faces picked during the run window; (b) planning reads ran one day past the planning end, so tours that crossed midnight into Sep 21 carried run-day picks into the plan. Found by the planning-invariance test (commit 4943bcd); fixed in 0358049, where restoring the old read window makes the test fail in all 6 cases.
+
+Consequence. Results from before 0358049 are not citable. In practice: they were likely optimistic, because the plan had hints about the run it was scored on. Any place they were shown (progress slides, report drafts, sponsor updates) gets a note that they were superseded, with the corrected figures. Case counts are tested with a snapshot-free sensitivity run: cases per pallet × 0.75 face fill. The 0.75 is an assumption, not a measurement. Before/after per policy: [fill in from compare_runs].
+
+Reverses if. An on-hand snapshot from before Sep 21 is found; then move_cases stops being an exception.
+
+2026-11-16 — Both sim windows are reported; the window is now fixed
+Decision. Results are reported for both windows: Oct 5–11 (one week, 2026-11-02) and Sep 21–Oct 15 (everything after the planning month, 2026-11-03). No further window changes after seeing results.
+
+Why. The longer window was adopted after the one-week result showed a net loss. The reason it is still appropriate: re-slotting moves are paid once, while savings accrue every day, so one week is too short to recover move costs. Reporting both makes the dependence on window length visible instead of hiding it.
+
+Consequence. Any headline figure states its window. If a policy is negative on one week and positive over 25 days, that is reported as a payback-period finding.
+
+Reverses if. Newer pick data allows a longer out-of-sample window; it is then added as a third window, not swapped in.
