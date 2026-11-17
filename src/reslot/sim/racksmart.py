@@ -21,17 +21,30 @@ simulator's data:
     D        driving feet between faces + depot, from the travel network table.
              Depot = trip_ends.start_stop (Stop_Dispatch). load_york looked for a
              "PD..." stop, retired on 2026-10-19.
-    faces    sorted usable case-pick faces that appear in the planning source or
-             the simulated window (load_york: every mapped location in its pick file).
-             All levels: load_york kept level A only; here a face at any level
-             is a candidate (team decision, 2026-11-03).
+    faces    every face the structure allows (FACE_RULE): from the location
+             master + drawing only, never from stock or from picks in any window
+             (load_york: every mapped location in its pick file). All levels:
+             load_york kept level A only (team decision, 2026-11-03).
     tours    one operator x one order; consecutive picks at one location are one
              visit; tours with >= 3 visits; ordered by (order, user) as load_york's
              groupby does. Case picks only (WZPCK/CS/F); load_york had no UOM filter.
-    cases    CS inventory per location, summed; missing -> median location.
+             Only picks before the planning end are read (a tour running past it is cut).
+    cases    racksmart.move_cases:
+               inventory_snapshot  CS inventory per location, summed; missing -> median
+                                   location (load_york's rule). The snapshot post-dates
+                                   the run start: a named lookahead exception.
+               pallet_fill         snapshot-free: cases per pallet of the face's item
+                                   (median CASES_PER_PALLET in planning picks) x face_fill;
+                                   no item or no pallet size -> the default.
     golden   within 60 ft of the front (max y) of its aisle.
     dpu      $ per foot: (WAGE/3600) / (MPH*5280/3600).
-    clusters location -> cluster of the product holding the most cases there.
+    clusters location -> cluster of the face's item, where the face's item is the
+             last item picked there before the planning end (FACE_ITEM_RULE).
+             The clusters file must carry a cutoff at or before the run start.
+
+Every input the plan used is recorded with the end of the data it saw
+(policy.planning_inputs); the engine refuses any that ends after the run start
+unless it is named in config lookahead_exceptions.
 
 Cost model: the notebook's, unchanged -- driving $ = feet x dpu, moving $ =
 COST_PER_CASE x cases in both swapped locations (notebook move_cost). Not
@@ -46,6 +59,7 @@ import re
 import sys
 import types
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -71,12 +85,25 @@ ADAPTER_DIFFERENCES = [
     "depot = trip_ends.start_stop (Stop_Dispatch); load_york looked for a retired PD stop",
     "case picks only (WZPCK/CS/F); load_york had no zone/UOM filter",
     "faces at all levels; load_york kept crosswalk level A only",
-    "faces = usable faces seen in the planning month or the simulated week; "
+    "faces = every structurally usable face (FACE_RULE), picked or not; "
     "load_york used every mapped location in its pick file (a year)",
+    "location -> item = last item picked there before the planning end; load_york used the inventory file",
 ]
 GAPS = ["PY/PZ tall/short slot rule not enforced (the notebook does not enforce it)",
-        "case counts from one inventory snapshot, applied to the planning month and the simulated week",
         "visit order after swaps: the notebook's cheapest-insertion replan, not a WMS re-route"]
+CASES_GAPS = {
+    "inventory_snapshot": "case counts from one inventory snapshot taken after the run start "
+                          "(lookahead exception move_cases), applied to the planning month and the run",
+    "pallet_fill": "case counts not observed: cases per pallet x face_fill (snapshot-free sensitivity)",
+}
+
+# The candidate face set. Structure only: the same faces whatever was picked or stocked.
+FACE_RULE = ("candidate faces = locations in location_stop_crosswalk.csv (location master + layout "
+             "drawing) with status 'ok', zone = scope.zone, slot_type = scope.slot_type, and a stop in "
+             "stop_distance_ft.csv (TravelNetwork.usable_faces). No stock, no picks, no dates.")
+FACE_ITEM_RULE = ("item at a face = the item of the last in-scope case pick at that face before the "
+                  "planning end (ties on time: highest event_id); a face with no such pick has no item")
+MOVE_CASES = ("inventory_snapshot", "pallet_fill")
 
 # The notebook's methods, as its run_month compares them. Each is planned once,
 # before the simulated week, on the same planning tours, Inputs and cost model.
@@ -161,8 +188,61 @@ def visit_sequences(tours, index: dict) -> list[list[int]]:
     return out
 
 
-def build_inputs(nb: Notebook, faces: list, net, depot: str, inventory: pd.DataFrame,
-                 clusters: pd.DataFrame | None, plan_tours: list):
+def structural_faces(net, scope: dict) -> list:
+    """FACE_RULE. Takes no events on purpose."""
+    return sorted(net.usable_faces(scope["zone"], scope["slot_type"]).index)
+
+
+def _in_scope_picks(events: pd.DataFrame, scope: dict) -> pd.DataFrame:
+    return events[(events["event_class"] == scope["event_class"]) & (events["from_zone"] == scope["zone"])
+                  & (events["uom"] == scope["uom"])]
+
+
+def face_items(events: pd.DataFrame, scope: dict, end: pd.Timestamp) -> pd.Series:
+    """FACE_ITEM_RULE: location -> item_id (str), from picks strictly before `end`."""
+    s = _in_scope_picks(events, scope)
+    s = s[(s["ts"] < end) & s["from_loc"].notna() & s["item_id"].notna()]
+    last = s.sort_values(["ts", "event_id"], kind="stable").drop_duplicates("from_loc", keep="last")
+    return pd.Series(last["item_id"].astype(str).str.strip().to_numpy(),
+                     index=last["from_loc"].astype(str).to_numpy(), name="item_id").sort_index()
+
+
+def cases_from_inventory(inventory: pd.DataFrame, faces: list) -> tuple[pd.Series, dict]:
+    """load_york's rule: CS inventory per location, summed; missing -> median location."""
+    inv = inventory[inventory.UOM == "CS"]
+    by = inv.assign(l=inv.LOCATION.astype(str).str.strip()).groupby("l").QTY.sum()
+    typical = float(np.median(by.values))
+    cases = pd.Series([float(by.get(l, typical)) for l in faces], index=faces)
+    return cases, {"basis": "inventory_snapshot", "faces_with_inventory": int(sum(l in by.index for l in faces)),
+                   "typical_cases": typical}
+
+
+def cases_from_pallet_fill(events: pd.DataFrame, scope: dict, end: pd.Timestamp, items: pd.Series,
+                           faces: list, face_fill: float, default_cpp=None) -> tuple[pd.Series, dict]:
+    """Snapshot-free: cases at a face = cases per pallet of its item x face_fill.
+    Cases per pallet per item = median CASES_PER_PALLET over planning picks before
+    `end` (values <= 0 are missing). No item / no pallet size -> default_cpp, or the
+    median over the faces' items when default_cpp is None."""
+    if not 0 < float(face_fill) <= 1:
+        raise ValueError(f"pallet_fill.face_fill must be in (0, 1], got {face_fill}")
+    s = _in_scope_picks(events, scope)
+    s = s[(s["ts"] < end) & (s["cases_per_pallet"] > 0)]
+    cpp = s.groupby(s["item_id"].astype(str).str.strip())["cases_per_pallet"].median()
+    at = {l: float(cpp[items[l]]) for l in faces if l in items.index and items[l] in cpp.index}
+    if default_cpp is None:
+        if not at:
+            raise ValueError("pallet_fill: no CASES_PER_PALLET for any face's item in the planning picks; "
+                             "set racksmart.pallet_fill.cases_per_pallet")
+        default_cpp = float(np.median(list(at.values())))
+    cases = pd.Series([at.get(l, float(default_cpp)) * float(face_fill) for l in faces], index=faces)
+    return cases, {"basis": "pallet_fill", "face_fill": float(face_fill), "default_cases_per_pallet": float(default_cpp),
+                   "faces_with_item_pallet_size": len(at)}
+
+
+def build_inputs(nb: Notebook, faces: list, net, depot: str, cases: pd.Series,
+                 clusters: pd.DataFrame | None, plan_tours: list, items: pd.Series | None = None):
+    """cases: cases per face (indexed by location). items: location -> item_id,
+    used only to place faces in clusters."""
     faces = sorted(faces)
     idx = {l: i for i, l in enumerate(faces)}
     n = len(faces)
@@ -179,10 +259,10 @@ def build_inputs(nb: Notebook, faces: list, net, depot: str, inventory: pd.DataF
     D[:n, n] = Ds[si, sidx[depot]]
     D[n, :n] = Ds[sidx[depot], si]
 
-    inv = inventory[inventory.UOM == "CS"]
-    cases_by = inv.assign(l=inv.LOCATION.astype(str).str.strip()).groupby("l").QTY.sum()
-    typical = float(np.median(cases_by.values))
-    cases = [float(cases_by.get(l, typical)) for l in faces]
+    no_cases = [l for l in faces if l not in cases.index]
+    if no_cases:
+        raise ValueError(f"no case count for faces {no_cases[:5]}")
+    cases = [float(cases[l]) for l in faces]
 
     f = net.crosswalk.loc[faces, ["stop_x_in", "stop_y_in"]].astype(float)
     ymax = f.groupby(f.stop_x_in.round(0)).stop_y_in.transform("max")
@@ -191,19 +271,25 @@ def build_inputs(nb: Notebook, faces: list, net, depot: str, inventory: pd.DataF
     dpu = (nb.WAGE / 3600.0) / (nb.MPH * 5280 / 3600.0)
 
     loc_cluster = {}
-    if clusters is not None:
-        cof = dict(zip(clusters.sku.astype(int), clusters.cluster.astype(int)))
-        top = (inv.assign(l=inv.LOCATION.astype(str).str.strip()).sort_values("QTY", ascending=False)
-               .drop_duplicates("l").set_index("l").ITEM)
-        loc_cluster = {idx[l]: cof[int(i)] for l, i in top.items() if l in idx and int(i) in cof}
+    if clusters is not None and items is not None:
+        cof = {_sku(s): int(c) for s, c in zip(clusters.sku, clusters.cluster)}
+        loc_cluster = {idx[l]: cof[_sku(i)] for l, i in items.items() if l in idx and _sku(i) in cof}
 
     train = visit_sequences(plan_tours, idx)
     inp = nb.Inputs("york", D, n, cases, golden, dpu, nb.COST_PER_CASE, {"plan": train},
                     unit_note="feet", extra=dict(faces=faces, loc_cluster=loc_cluster))
     return inp, train, {"faces": n, "planning_tours": len(train), "golden": len(golden),
-                        "faces_with_inventory": int(sum(l in cases_by.index for l in faces)),
-                        "typical_cases": typical, "faces_with_cluster": len(loc_cluster),
-                        "depot": depot}
+                        "faces_with_item": int(0 if items is None else sum(l in items.index for l in faces)),
+                        "faces_with_cluster": len(loc_cluster), "depot": depot}
+
+
+def _sku(x) -> str:
+    """SKU join key: text, no surrounding spaces, no leading zeros (the clusters
+    file stores SKUs as numbers, the pick reports as text)."""
+    s = str(x).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s.lstrip("0") or "0"
 
 
 # --------------------------------------------------------------------------
@@ -329,27 +415,46 @@ def workbook_replay(policy: NotebookPlanPolicy, tours) -> dict:
             "move_cost_usd": round(cost, 2), "net_usd": round(saved * W.dpu - cost, 2)}
 
 
-def load_racksmart(cfg: dict, net, sim_events: pd.DataFrame, method: str = "racksmart"):
-    """Plan one notebook method; returns (policy, manifest info, input files)."""
-    nb, inp, train, base, files = prepare_planning(cfg, net, sim_events)
+def load_racksmart(cfg: dict, net, method: str = "racksmart"):
+    """Plan one notebook method; returns (policy, manifest info, input files).
+    Takes no run-window events: the plan can only see the planning inputs."""
+    nb, inp, train, base, files = prepare_planning(cfg, net)
     policy = plan_method(nb, inp, train, method)
-    # exclusive end of the planning tours; the engine refuses a plan that saw the run
-    policy.planning_inputs_end = pd.Timestamp(base["planning_inputs_end"])
+    # every input the plan saw, with the end of its data; engine.check_planning_inputs
+    # refuses any that ends after the run start unless config names it an exception
+    policy.planning_inputs = base["planning_inputs"]
     return policy, method_info(policy, base), files
 
 
 def method_info(policy: NotebookPlanPolicy, base: dict) -> dict:
     m = METHODS[policy.name]
+    cases_gap = [CASES_GAPS[base["move_cases"]["basis"]]] if "move_cases" in base else []
     return {**base, "method": policy.name, "label": m["label"], "uses_golden_zone": m["uses_golden_zone"],
             "plan": policy.plan,
             "moves": len(policy.moves()), "move_cost_usd": policy.move_cost(None),
-            "known_gaps": GAPS + m["gaps"]}
+            "known_gaps": GAPS + cases_gap + m["gaps"]}
 
 
-def prepare_planning(cfg: dict, net, sim_events: pd.DataFrame):
+def cluster_cutoff(clusters_path) -> tuple[pd.Timestamp, dict]:
+    """The exclusive data cutoff the affinity scripts recorded next to the
+    clusters file (<stem>_meta.json). Refuses clusters with no record, or a
+    record written for a different file."""
+    path = Path(clusters_path)
+    meta_path = path.with_name(path.stem + "_meta.json")
+    if not meta_path.exists():
+        raise ValueError(f"{path} has no {meta_path.name}: its data cutoff is unknown. Rebuild the clusters "
+                         "with src/affinity (build_matrix.py CUTOFF, then frequent_itemsets.py, affinity_graph.py)")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("sku_clusters_sha256_16") != file_hash(path):
+        raise ValueError(f"{meta_path.name} was written for a different {path.name}; rerun affinity_graph.py")
+    return pd.Timestamp(meta["cutoff_exclusive"]), meta
+
+
+def prepare_planning(cfg: dict, net):
     """Read the planning inputs named in config.racksmart (shared by every
     notebook method) and build the notebook's Inputs. Returns
-    (notebook, inputs, planning tours, manifest info, input files to hash)."""
+    (notebook, inputs, planning tours, manifest info, input files to hash).
+    Nothing from the run window is passed in."""
     from ..io.wms_picks import load_wms_picks
     from .engine import window_bounds
     from .workload import build_workload
@@ -357,9 +462,10 @@ def prepare_planning(cfg: dict, net, sim_events: pd.DataFrame):
     rc, scope = cfg["racksmart"], cfg["scope"]
     nb = load_notebook(rc["notebook"])
     start, end = window_bounds({"window": rc["planning_window"]})
-    # Only the planning month is read out of the 365-day reports, plus one day each
-    # side so the window rule can see tours that start before it or run past its end.
-    read = (start - pd.Timedelta(days=1), end + pd.Timedelta(days=1))
+    # Only the planning month is read out of the 365-day reports, plus one day before
+    # it so the window rule can see tours that start before it. Nothing at or after
+    # the planning end is read: a tour that runs past it is cut there.
+    read = (start - pd.Timedelta(days=1), end)
     parts = {p: load_wms_picks(p, rc["planning_ts_format"], window=read) for p in rc["planning_picks"]}
     per_file = {str(p): len(df) for p, df in parts.items()}
     if not any(per_file.values()):
@@ -369,22 +475,56 @@ def prepare_planning(cfg: dict, net, sim_events: pd.DataFrame):
     n_raw = len(planning)
     planning = planning.drop_duplicates("event_id").reset_index(drop=True)
     plan_work = build_workload(planning, net, scope, cfg["tour"], start, end)
-    inventory = pd.read_csv(rc["inventory_path"])                    # as load_york reads it
-    clusters = pd.read_csv(rc["clusters_path"]) if rc.get("clusters_path") else None
-    faces = faces_for(net, planning, sim_events, scope=scope)
-    inp, train, built = build_inputs(nb, faces, net, cfg["trip_ends"]["start_stop"], inventory,
-                                     clusters, plan_work.tours)
+
+    faces = structural_faces(net, scope)
+    items = face_items(planning, scope, end)
+    files = [rc["notebook"], *rc["planning_picks"]]
+    picks_end = str(end)
+    inputs = {
+        "planning_picks": {"end": picks_end, "files": list(rc["planning_picks"])},
+        "faces": {"end": None, "structural": True, "rule": FACE_RULE},
+        "face_items": {"end": picks_end, "rule": FACE_ITEM_RULE},
+    }
+
+    mode = rc.get("move_cases", "inventory_snapshot")
+    if mode == "inventory_snapshot":
+        if not rc.get("inventory_as_of"):
+            raise ValueError("racksmart.inventory_as_of is required with move_cases: inventory_snapshot "
+                             "(the snapshot's date is what the lookahead check compares)")
+        inventory = pd.read_csv(rc["inventory_path"])                    # as load_york reads it
+        cases, cases_info = cases_from_inventory(inventory, faces)
+        inputs["move_cases"] = {"end": str(pd.Timestamp(rc["inventory_as_of"])), "basis": mode,
+                                "file": rc["inventory_path"]}
+        files.append(rc["inventory_path"])
+    elif mode == "pallet_fill":
+        pf = rc.get("pallet_fill") or {}
+        cases, cases_info = cases_from_pallet_fill(planning, scope, end, items, faces,
+                                                   pf.get("face_fill", 0.75), pf.get("cases_per_pallet"))
+        inputs["move_cases"] = {"end": picks_end, "basis": mode,
+                                "rule": "cases per pallet of the face's item x face_fill, from planning picks"}
+    else:
+        raise ValueError(f"racksmart.move_cases must be one of {MOVE_CASES}, got {mode!r}")
+
+    clusters, cluster_meta = None, None
+    if rc.get("clusters_path"):
+        cutoff, cluster_meta = cluster_cutoff(rc["clusters_path"])
+        clusters = pd.read_csv(rc["clusters_path"], dtype={"sku": str})
+        inputs["clusters"] = {"end": str(cutoff), "file": rc["clusters_path"]}
+        files.append(rc["clusters_path"])
+
+    inp, train, built = build_inputs(nb, faces, net, cfg["trip_ends"]["start_stop"], cases,
+                                     clusters, plan_work.tours, items=items)
     base = {"notebook": nb.info, "planning_window": dict(rc["planning_window"]),
-            "planning_inputs_end": str(end),
+            "planning_inputs": inputs,
             "planning_rows": {"read_window": [str(read[0].date()), str(read[1].date())],
                               "read": n_raw, "per_file": per_file, "after_dedup_by_event_id": len(planning)},
             "planning_workload": {k: plan_work.counts[k] for k in
                                   ("picks_kept", "picks_dropped", "dropped_by_reason", "tours")},
-            "inputs": built, "inventory_snapshot": rc["inventory_path"],
+            "inputs": built, "move_cases": cases_info,
+            "faces_planned_but_not_picked_in_planning": int(len(set(faces) - set(items.index))),
             "adapter_differences": ADAPTER_DIFFERENCES}
-    files = [rc["notebook"], *rc["planning_picks"], rc["inventory_path"]]
-    if rc.get("clusters_path"):
-        files.append(rc["clusters_path"])
+    if cluster_meta is not None:
+        base["clusters_meta"] = cluster_meta
     return nb, inp, train, base, files
 
 
@@ -396,14 +536,3 @@ def golden_table(policy: NotebookPlanPolicy) -> pd.DataFrame:
 def swap_table(policy: NotebookPlanPolicy) -> pd.DataFrame:
     """The notebook's swap_list for the plan."""
     return policy.nb.swap_list(policy.inp, policy.moved)
-
-
-def faces_for(net, *event_frames, scope: dict) -> list:
-    """Usable case-pick faces that appear in any of the given EVENTS frames."""
-    usable = net.usable_faces(scope["zone"], scope["slot_type"]).index
-    seen = set()
-    for ev in event_frames:
-        s = ev[(ev["event_class"] == scope["event_class"]) & (ev["from_zone"] == scope["zone"])
-               & (ev["uom"] == scope["uom"])]
-        seen |= set(s["from_loc"].dropna().astype(str))
-    return sorted(seen & set(usable))

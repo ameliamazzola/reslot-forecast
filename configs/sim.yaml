@@ -70,8 +70,30 @@ racksmart:
     - data/raw/yowmspd2__picks_past_365days_ranon9.21.26.csv
     - data/raw/yowmspd2_archive_picks_past_365days_ranon9.21.26.csv
   planning_ts_format: "%m/%d/%Y %I:%M:%S %p"
-  inventory_path: "data/raw/York Inventory On Hand 10.20.26 1PM_EST 1.csv"   # snapshot 2026-10-20
+  # Case counts at each face (the notebook's move cost and its tie-breaks):
+  #   inventory_snapshot  the on-hand snapshot below. Taken AFTER the run start, so it is
+  #                       a named lookahead exception (lookahead_exceptions.move_cases).
+  #   pallet_fill         snapshot-free sensitivity: cases per pallet of the face's item
+  #                       (median CASES_PER_PALLET in planning picks) x face_fill.
+  #                       run_sim.py --move-cases pallet_fill; run_all.py --sensitivity.
+  move_cases: inventory_snapshot
+  inventory_path: "data/raw/York Inventory On Hand 10.20.26 1PM_EST 1.csv"
+  inventory_as_of: "2026-10-20 13:00"  # the snapshot's time; the lookahead check compares it
+  pallet_fill:
+    face_fill: 0.75                    # share of a pallet on the face (assumed, not measured)
+    cases_per_pallet: null             # default when a face has no item / no pallet size;
+                                       # null = median over the faces' items
+  # Affinity clusters. Must have sku_clusters_meta.json beside it (written by
+  # src/affinity/affinity_graph.py) with a data cutoff at or before the run start.
   clusters_path: data/processed/sku_clusters.csv                             # null = no clusters
+
+# Planning inputs allowed to end after the run start, by name, with the reason.
+# The engine refuses any other planning input that ends after the run start, and
+# every manifest records which of these a run actually used.
+lookahead_exceptions:
+  move_cases: >-
+    case counts per face come from the 2026-10-20 on-hand snapshot (no earlier one exists);
+    it prices moves and breaks ties, it does not choose faces. Sensitivity: move_cases: pallet_fill.
 
 paths:
   out: data/processed/sim       # every sim output (replay and live); gitignored, C&D-derived

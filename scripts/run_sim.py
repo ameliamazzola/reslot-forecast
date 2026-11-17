@@ -1,13 +1,15 @@
 """Replay one window of case-pick tours through the SimPy loop under one policy.
 
 Run:  python scripts/run_sim.py [configs/sim.yaml] [--policy static|racksmart|classic_abc|abc_cost_test|family_grouping]
+                                [--move-cases inventory_snapshot|pallet_fill]
 
 Reads:
   data.picks_path                                   converted transactions export
   <travel.dir>/stop_distance_ft.csv                 from build_travel_network.py
   <travel.dir>/location_stop_crosswalk.csv          from build_travel_network.py
 
-Writes data/processed/sim/sim_<policy>_<leg model>_<start>_<end>/ (config paths.out):
+Writes data/processed/sim/sim_<policy>_<leg model>_<start>_<end>[_pallet_fill]/ (config paths.out;
+the suffix marks a notebook method run with the snapshot-free move cost):
   tours.csv           one row per tour: wait, busy, scan span, pick feet, dispatch feet
   legs.csv            one row per simulated pick-to-pick leg, with observed seconds
   dropped_picks.csv   every in-window case pick that could not be placed, with its reason
@@ -34,10 +36,14 @@ from reslot.utils.manifest import write_manifest
 ap = argparse.ArgumentParser(description="Replay one window of case-pick tours under one policy.")
 ap.add_argument("config", nargs="?", default="configs/sim.yaml")
 ap.add_argument("--policy", help="override the config's policy for this run (recorded in the manifest's config)")
+ap.add_argument("--move-cases", choices=["inventory_snapshot", "pallet_fill"],
+                help="override racksmart.move_cases for this run (recorded in the manifest's config)")
 args = ap.parse_args()
 cfg = load_config(args.config)
 if args.policy:
     cfg["policy"] = args.policy
+if args.move_cases:
+    cfg["racksmart"]["move_cases"] = args.move_cases
 try:
     leg_model = E.make_leg_model(cfg)
 except ValueError as exc:
@@ -52,7 +58,7 @@ events = load_wms_picks(picks_path, cfg["data"]["ts_format"])
 policy, move_cost, rs_files = None, None, []
 from reslot.sim import racksmart as RS
 if cfg["policy"] in RS.METHODS:                     # a notebook method (RackSmart, ABC, family grouping)
-    policy, rs_info, rs_files = RS.load_racksmart(cfg, net, events, method=cfg["policy"])
+    policy, rs_info, rs_files = RS.load_racksmart(cfg, net, method=cfg["policy"])
     move_cost = policy.move_cost
 
 out = E.run(cfg, events, net, leg_model, policy=policy, move_cost=move_cost)
@@ -61,8 +67,7 @@ if policy is not None:
     x["notebook_plan"] = {**rs_info, "workbook_replay": RS.workbook_replay(policy, out.tours)}
 
 w = cfg["window"]
-run_dir = (Path(cfg["paths"]["out"])
-           / f"sim_{x['policy']}_{x['leg_time_model']}_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}")
+run_dir = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, x["policy"], x["leg_time_model"])
 run_dir.mkdir(parents=True, exist_ok=True)
 res.tours.to_csv(run_dir / "tours.csv", index=False)
 res.legs.to_csv(run_dir / "legs.csv", index=False)
@@ -102,6 +107,9 @@ if "notebook_plan" in x:
     print(f"  {r['what']}: driving cut {r['walking_cut_pct']}%, gross ${r['gross_usd']:,.0f}, "
           f"net ${r['net_usd']:,.0f} on {r['tours']:,} tours")
     print(f"  not enforced: {'; '.join(rs['known_gaps'])}")
+used = x["planning_inputs"]["lookahead_exceptions_used"]
+if used:
+    print(f"\nlookahead exceptions used (config lookahead_exceptions): {', '.join(used)}")
 print(f"\nNOT findings: {x['not_findings']['note']}")
 if manifest["git_dirty"]:
     print("NOTE working tree is dirty: this run is not citable")

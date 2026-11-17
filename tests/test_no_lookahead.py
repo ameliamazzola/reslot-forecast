@@ -6,9 +6,10 @@ released (and planning inputs that end before the run). Synthetic data only.
    whether or not more orders arrive after T -- including a 'canary' order
    built to change any decision that could see it.
 3. Planning invariance (notebook methods): the plan made before the run is
-   identical with and without a canary pick inside the run window. This fails
-   today -- the candidate face set includes faces picked in the run window
-   (racksmart.faces_for) -- and is fixed in the next commit.
+   identical with and without a canary pick on the run's first day in the
+   planning file, at a face and item the planning month never touched. Planning
+   takes no run-window events at all (load_racksmart has no such argument), and
+   every planning input is dated and checked by the engine.
 """
 import sys
 from pathlib import Path
@@ -22,7 +23,6 @@ import yaml
 
 import test_racksmart as TR
 import test_sim as TS
-from reslot.schemas import EVENTS, validate
 from reslot.sim import engine as E
 from reslot.sim.orders import FutureAccessError
 from reslot.sim.policy import StaticPolicy, make_policy
@@ -108,7 +108,7 @@ def _planning_cfg(tmp_path):
     (tmp_path / "travel").mkdir()
     D.to_csv(tmp_path / "travel" / "stop_distance_ft.csv")
     xw.to_csv(tmp_path / "travel" / "location_stop_crosswalk.csv", index=False)
-    TR._pick_rows(TR.PLAN, "2026-08-24").to_csv(tmp_path / "plan.csv", index=False)
+    TR._pick_rows(TR.PLAN, "2026-08-24").assign(CASES_PER_PALLET=60).to_csv(tmp_path / "plan.csv", index=False)
     TR.inventory().to_csv(tmp_path / "inv.csv", index=False)
     cfg = yaml.safe_load((TS.REPO / "configs" / "sim.yaml").read_text())
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
@@ -117,21 +117,58 @@ def _planning_cfg(tmp_path):
     return cfg, TravelNetwork(D, xw)
 
 
-def _run_window_pick(location):
-    """One case pick inside the run window (Oct 6), at a face the planning month never touched."""
-    return validate(pd.DataFrame([{"event_id": 1, "ts": pd.Timestamp("2026-10-06 08:00"), "event_class": "pick",
-                                   "from_zone": "WZPCK", "uom": "CS", "from_loc": location, "qty": 1.0,
-                                   "order_id": "9", "user_id": "U"}]), EVENTS, "events", strict=False)
+def _canary_rows(path, day="2026-09-21 06:00"):
+    """Append picks on the run's first day (Sep 21, the run start) to a planning
+    file: a new face (FF005A), a new item, a huge pallet size -- anything that read
+    them would change faces, items, cases or tours."""
+    df = pd.read_csv(path, dtype=str)
+    extra = df.head(3).copy()
+    extra["NO"] = [str(10**6 + k) for k in range(3)]
+    extra["CREATE_DT"] = pd.Timestamp(day).strftime("%m/%d/%Y %I:%M:%S %p")
+    extra["FROM_LOCATION"] = ["FF005A", "FF009A", "FF005A"]
+    extra["FROM_ITEM"] = "99999999"
+    extra["CASES_PER_PALLET"] = "9999"
+    extra["ORD_NO"] = "777"
+    pd.concat([df, extra]).to_csv(path, index=False)
 
 
-@pytest.mark.xfail(strict=True, reason="face-set leak: racksmart.faces_for includes faces picked in the run "
-                                       "window; fixed in the next commit")
+def test_planning_takes_no_run_window_events():
+    import inspect
+    from reslot.sim.racksmart import load_racksmart, prepare_planning, structural_faces
+    for f in (load_racksmart, prepare_planning, structural_faces):
+        assert not any("event" in name for name in inspect.signature(f).parameters), f.__name__
+
+
+@pytest.mark.parametrize("move_cases", ["inventory_snapshot", "pallet_fill"])
 @pytest.mark.parametrize("method", ["racksmart", "abc_cost_test", "family_grouping"])
-def test_the_plan_does_not_depend_on_the_run_window(tmp_path, method):
+def test_the_plan_does_not_depend_on_the_run_window(tmp_path, method, move_cases):
     from reslot.sim.racksmart import load_racksmart
     cfg, n = _planning_cfg(tmp_path)
-    none = validate(pd.DataFrame(columns=list(EVENTS)), EVENTS, "events", strict=False)
-    p0, i0, _ = load_racksmart(cfg, n, none, method=method)
-    p1, i1, _ = load_racksmart(cfg, n, _run_window_pick("FF005A"), method=method)
+    cfg["racksmart"]["move_cases"] = move_cases
+    p0, i0, _ = load_racksmart(cfg, n, method=method)
+    _canary_rows(tmp_path / "plan.csv")
+    p1, i1, _ = load_racksmart(cfg, n, method=method)
     assert p0.inp.extra["faces"] == p1.inp.extra["faces"]                       # what the planner could consider
+    assert list(p0.inp.cases) == list(p1.inp.cases)
+    assert p0.planning_inputs == p1.planning_inputs
+    assert i0["planning_workload"] == i1["planning_workload"]
     assert {(m.from_location, m.to_location) for m in p0.moves()} == {(m.from_location, m.to_location) for m in p1.moves()}
+    assert i1["planning_rows"]["read"] == i0["planning_rows"]["read"]           # the canary rows were never read
+
+
+def test_every_planning_input_is_dated_and_checked(tmp_path):
+    from reslot.sim.racksmart import load_racksmart
+    cfg, n = _planning_cfg(tmp_path)
+    pol, _, _ = load_racksmart(cfg, n, method="racksmart")
+    ins = pol.planning_inputs
+    assert set(ins) == {"planning_picks", "faces", "face_items", "move_cases"}
+    assert ins["faces"]["end"] is None and ins["faces"]["structural"]
+    assert ins["planning_picks"]["end"] == ins["face_items"]["end"] == "2026-09-21 00:00:00"
+    start = pd.Timestamp(cfg["window"]["start"])
+    with pytest.raises(ValueError, match="move_cases"):                         # snapshot is after the run start
+        E.check_planning_inputs(pol, start, {})
+    rec = E.check_planning_inputs(pol, start, cfg["lookahead_exceptions"])
+    assert list(rec["lookahead_exceptions_used"]) == ["move_cases"]
+    cfg["racksmart"]["move_cases"] = "pallet_fill"
+    pol, _, _ = load_racksmart(cfg, n, method="racksmart")
+    assert E.check_planning_inputs(pol, start, cfg["lookahead_exceptions"])["lookahead_exceptions_used"] == {}

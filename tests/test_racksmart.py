@@ -52,6 +52,11 @@ def inventory():
                          "UOM": "CS", "QTY": [5.0] * 9})            # FF009A missing -> median
 
 
+def snap_cases():
+    """Case counts per face from the inventory snapshot (load_york's rule)."""
+    return RS.cases_from_inventory(inventory(), LOCS)[0]
+
+
 def interleave(pattern_counts):
     """Spread the patterns evenly over the sequence, the way real tours mix
     across order numbers. (The notebook's backtest guard plans on the first
@@ -86,7 +91,7 @@ def net():
 
 @pytest.fixture
 def planned(nb, net):
-    inp, train, built = RS.build_inputs(nb, LOCS, net, "D", inventory(), None, tours_of(PLAN))
+    inp, train, built = RS.build_inputs(nb, LOCS, net, "D", snap_cases(), None, tours_of(PLAN))
     return RS.plan_policy(nb, inp, train), built
 
 
@@ -137,7 +142,7 @@ def test_notebook_file_is_untouched_by_loading(nb):
 # --------------------------------------------------------------------------
 
 def test_inputs_follow_load_york_rules(nb, net):
-    inp, train, built = RS.build_inputs(nb, LOCS, net, "D", inventory(), None, tours_of(PLAN))
+    inp, train, built = RS.build_inputs(nb, LOCS, net, "D", snap_cases(), None, tours_of(PLAN))
     n = len(LOCS)
     assert inp.depot == n and inp.D.shape == (n + 1, n + 1)
     assert inp.D[n, 0] == 10 and inp.D[9, n] == 100 and inp.D[0, 9] == 90      # depot = dispatch stop
@@ -157,16 +162,13 @@ def test_faces_at_every_level_are_candidates():
     """Team decision: unlike load_york, upper-level faces are not filtered out."""
     D, xw = network()
     xw["level"] = ["A"] * 8 + ["B", "C"]                    # FF008A / FF009A codes, upper-level rows
-    ev = validate(pd.DataFrame({"event_id": [1, 2], "ts": pd.Timestamp("2026-08-24"), "event_class": "pick",
-                                "from_zone": "WZPCK", "uom": "CS", "from_loc": ["FF008A", "FF009A"],
-                                "qty": 1.0, "order_id": "1", "user_id": "U"}), EVENTS, "events", strict=False)
-    assert RS.faces_for(TravelNetwork(D, xw), ev, scope=SCOPE) == ["FF008A", "FF009A"]
+    assert {"FF008A", "FF009A"} <= set(RS.structural_faces(TravelNetwork(D, xw), SCOPE))
     assert any("all levels" in d for d in RS.ADAPTER_DIFFERENCES)
 
 
 def test_depot_is_the_configured_dispatch_stop_not_a_pd_stop(nb, net):
     with pytest.raises(KeyError):
-        RS.build_inputs(nb, LOCS, net, "PD_old", inventory(), None, tours_of(PLAN))
+        RS.build_inputs(nb, LOCS, net, "PD_old", snap_cases(), None, tours_of(PLAN))
 
 
 # --------------------------------------------------------------------------
@@ -285,7 +287,7 @@ def test_plan_policies_end_to_end(tmp_path):
     run_dir = tmp_path / "runs" / "notebook_plans_20261005_20261011"
     m = json.loads((run_dir / "manifest.json").read_text())
     rows = m["planning"]["planning_rows"]
-    assert rows["read_window"] == ["2026-08-20", "2026-09-22"] and rows["read"] == len(plan) + 1
+    assert rows["read_window"] == ["2026-08-20", "2026-09-21"] and rows["read"] == len(plan) + 1
     assert rows["after_dedup_by_event_id"] == len(plan) and sum(rows["per_file"].values()) == len(plan) + 1
     assert m["planning"]["notebook"]["cells_run"]["final"] == 9
     assert m["planning"]["adapter_differences"] == RS.ADAPTER_DIFFERENCES
@@ -313,7 +315,7 @@ def test_every_method_matches_the_notebooks_own_run_month(nb, net):
     cell = cell[:cell.index("months = sorted")]              # the def only, not the run below it
     ns = dict(nb.ns)
     exec(cell, ns)
-    inp, train, _ = RS.build_inputs(nb, LOCS, net, "D", inventory(), None, tours_of(PLAN))
+    inp, train, _ = RS.build_inputs(nb, LOCS, net, "D", snap_cases(), None, tours_of(PLAN))
     test = RS.visit_sequences(tours_of([([A, B, HOT], 60), ([A, B, QUIET], 6)]), {l: i for i, l in enumerate(LOCS)})
     nb_inp = dataclasses.replace(inp, tours_by_period={"2026-08": train, "2026-10": test})
     rows, _ = ns["run_month"](nb_inp, "2026-10", nb.DEMAND_SCALE, nb.COST_MULT)
@@ -331,7 +333,7 @@ def test_every_method_matches_the_notebooks_own_run_month(nb, net):
 
 
 def test_comparison_methods_record_how_they_were_run(nb, net):
-    inp, train, _ = RS.build_inputs(nb, LOCS, net, "D", inventory(), None, tours_of(PLAN))
+    inp, train, _ = RS.build_inputs(nb, LOCS, net, "D", snap_cases(), None, tours_of(PLAN))
     plans = RS.plan_comparison(nb, inp, train)
     assert set(plans) == {"classic_abc", "abc_cost_test", "family_grouping"}
     for key, pol in plans.items():
@@ -361,9 +363,8 @@ def test_planning_survives_a_file_with_nothing_in_the_month(tmp_path, nb, net):
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
     cfg["racksmart"].update(notebook=str(NOTEBOOK), planning_picks=[str(tmp_path / "older.csv"), str(tmp_path / "in_month.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None)
-    ev = validate(pd.DataFrame(columns=list(EVENTS)), EVENTS, "events", strict=False)
-    _, _, train, base, _ = prepare_planning(cfg, TravelNetwork(D, xw), ev)
+    _, _, train, base, _ = prepare_planning(cfg, TravelNetwork(D, xw))
     assert len(train) == 220 and base["planning_rows"]["per_file"][str(tmp_path / "older.csv")] == 0
     cfg["racksmart"]["planning_picks"] = [str(tmp_path / "older.csv")]
     with pytest.raises(ValueError, match="no picks between"):
-        prepare_planning(cfg, TravelNetwork(D, xw), ev)
+        prepare_planning(cfg, TravelNetwork(D, xw))

@@ -304,6 +304,17 @@ def window_bounds(cfg: dict) -> tuple[pd.Timestamp, pd.Timestamp]:
     return start, end
 
 
+def run_dir_name(cfg: dict, policy: str, leg_model: str) -> str:
+    """sim_<policy>_<leg model>_<start>_<end>, plus _pallet_fill for a notebook
+    method planned with the snapshot-free move cost (so a sensitivity run never
+    overwrites the main one)."""
+    w = cfg["window"]
+    name = f"sim_{policy}_{leg_model}_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}"
+    if policy != "static" and (cfg.get("racksmart") or {}).get("move_cases") == "pallet_fill":
+        name += "_pallet_fill"
+    return name
+
+
 @dataclass
 class RunOutput:
     result: SimResult
@@ -312,13 +323,38 @@ class RunOutput:
     tours: list               # the workload's tours, as simulated
 
 
-def check_planning_inputs(policy, start: pd.Timestamp) -> None:
-    """No lookahead in planning: a policy that planned before the run must have
-    used inputs that end at or before the run start (planning_inputs_end is the
-    exclusive end of the data its plan saw)."""
+def check_planning_inputs(policy, start: pd.Timestamp, exceptions: dict | None = None) -> dict:
+    """No lookahead in planning. A policy that planned before the run lists every
+    input it used in `planning_inputs`: {name: {"end": exclusive end of the data it
+    saw, or None with "structural": True for undated structure}}. A bare
+    `planning_inputs_end` counts as one input of that name.
+
+    Refused: an input that ends after the run start, unless its name is in
+    `exceptions` (config lookahead_exceptions: {name: why}); an input with no end
+    that is not marked structural. Returns what the manifest records."""
+    exceptions = dict(exceptions or {})
+    inputs = {k: dict(v) for k, v in (getattr(policy, "planning_inputs", None) or {}).items()}
     end = getattr(policy, "planning_inputs_end", None)
-    if end is not None and pd.Timestamp(end) > start:
-        raise ValueError(f"policy {policy.name!r} planned on inputs up to {end}, after the run start {start}")
+    if end is not None:
+        inputs.setdefault("planning_inputs_end", {"end": str(end)})
+    used, refused = {}, []
+    for name, d in inputs.items():
+        e = d.get("end")
+        if e is None:
+            if not d.get("structural"):
+                raise ValueError(f"policy {policy.name!r}: planning input {name!r} has no end date and is "
+                                 "not marked structural; its lookahead cannot be checked")
+            continue
+        if pd.Timestamp(e) > start:
+            if name in exceptions:
+                used[name] = exceptions[name]
+            else:
+                refused.append(f"{name} (up to {e})")
+    if refused:
+        raise ValueError(f"policy {policy.name!r} planned on inputs after the run start {start}: "
+                         f"{', '.join(refused)}. Only inputs named in lookahead_exceptions may do that.")
+    return {"run_start": str(start), "inputs": inputs, "lookahead_exceptions_allowed": exceptions,
+            "lookahead_exceptions_used": used}
 
 
 def run(cfg: dict, events: pd.DataFrame, net: TravelNetwork, leg_model: LegTimeModel,
@@ -329,7 +365,7 @@ def run(cfg: dict, events: pd.DataFrame, net: TravelNetwork, leg_model: LegTimeM
 
     start, end = window_bounds(cfg)
     policy = policy or make_policy(cfg["policy"])
-    check_planning_inputs(policy, start)
+    planning = check_planning_inputs(policy, start, cfg.get("lookahead_exceptions"))
     ends = cfg["trip_ends"]
     source = ReplaySource(events, net, cfg["scope"], cfg["tour"], start, end,
                           picks_path=(cfg.get("data") or {}).get("picks_path"))
@@ -344,6 +380,7 @@ def run(cfg: dict, events: pd.DataFrame, net: TravelNetwork, leg_model: LegTimeM
                    "days": (end - start).days},
         "operators": int(cfg["operators"]),
         "policy": policy.name,
+        "planning_inputs": planning,
         "leg_time_model": leg_model.name,
         "leg_time": getattr(leg_model, "provenance", {"name": leg_model.name}),
         "dispatch_legs": ends["dispatch_legs"],

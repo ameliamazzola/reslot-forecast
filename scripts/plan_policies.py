@@ -29,7 +29,7 @@ import pandas as pd
 from reslot.config import load_config
 from reslot.io.wms_picks import load_wms_picks
 from reslot.sim import racksmart as RS
-from reslot.sim.engine import window_bounds
+from reslot.sim.engine import check_planning_inputs, window_bounds
 from reslot.sim.workload import build_workload
 from reslot.travel.artifacts import load_travel
 from reslot.utils.manifest import write_manifest
@@ -40,9 +40,15 @@ net.require_stops(cfg["trip_ends"]["start_stop"])
 picks_path = cfg["data"]["picks_path"]
 events = load_wms_picks(picks_path, cfg["data"]["ts_format"])
 
-nb, inp, train, base, files = RS.prepare_planning(cfg, net, events)
+nb, inp, train, base, files = RS.prepare_planning(cfg, net)
 policies = {"racksmart": RS.plan_policy(nb, inp, train), **RS.plan_comparison(nb, inp, train)}
 start, end = window_bounds(cfg)
+for pol in policies.values():                    # same inputs for every method; same check as engine.run
+    pol.planning_inputs = base["planning_inputs"]
+try:
+    lookahead = check_planning_inputs(policies["racksmart"], start, cfg.get("lookahead_exceptions"))
+except ValueError as exc:
+    raise SystemExit(f"not planning: {exc}")
 week = build_workload(events, net, cfg["scope"], cfg["tour"], start, end)
 
 w = cfg["window"]
@@ -68,7 +74,7 @@ manifest = write_manifest(run_dir, cfg, inputs=[picks_path, net.sources["distanc
                                  "trip_start": cfg["trip_ends"]["start_stop"],
                                  "scored_week_workload": {k: week.counts[k] for k in
                                                           ("picks_kept", "picks_dropped", "tours")},
-                                 "planning": shared, "plans": plans,
+                                 "planning": shared, "planning_inputs": lookahead, "plans": plans,
                                  "scoring": "the notebook's replay and cost model (feet and $), not the SimPy timing"})
 
 print(f"notebook {base['notebook']['path']} (sha {base['notebook']['sha256_16']}); planned on "

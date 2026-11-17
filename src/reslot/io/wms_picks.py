@@ -119,6 +119,10 @@ def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT, window=
     events = validate(df, EVENTS, "events[wms_picks]", strict=False)
     events = events[list(EVENTS)]
     events["type_code"] = type_code
+    # Pick reports carry CASES_PER_PALLET per row (item's pallet size); kept for the
+    # snapshot-free move cost. Absent in some exports -> NaN.
+    events["cases_per_pallet"] = (pd.to_numeric(df["CASES_PER_PALLET"], errors="coerce")
+                                  if "CASES_PER_PALLET" in df else float("nan"))
 
     if len(events):
         locs = events["from_loc"].apply(parse_location).apply(pd.Series)

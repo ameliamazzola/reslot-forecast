@@ -46,7 +46,7 @@ def two_runs(tmp_path, monkeypatch):
     xw.to_csv(travel / CROSSWALK_FILE, index=False)
     pd.DataFrame({"stop_id": T.STOPS, "x_in": 180855.63, "y_in": [5120.0] + [5000 - 120 * k for k in range(10)],
                   "node_type": ["dispatch"] + ["rack"] * 10, "label": None}).to_csv(travel / "stops.csv", index=False)
-    T._pick_rows(T.PLAN, "2026-08-24").to_csv(tmp_path / "plan.csv", index=False)
+    T._pick_rows(T.PLAN, "2026-08-24").assign(CASES_PER_PALLET=60).to_csv(tmp_path / "plan.csv", index=False)
     week = pd.concat([T._pick_rows([([T.A, T.B, T.HOT], 10), ([T.A, T.B, T.QUIET], 2)], f"2026-10-{5 + d:02d}",
                                    transactions=True) for d in range(7)], ignore_index=True)
     week["NO"] = range(1, len(week) + 1)
@@ -154,9 +154,9 @@ def test_golden_zone_reaches_the_bundle_only_for_methods_that_use_it(two_runs):
     j["notebook_plan"]["uses_golden_zone"] = True                         # as the ABC methods record it
     m.write_text(json.dumps(j))
     rs = next(r for r in _bundle(travel, runs.values())["runs"] if r["policy"] == "racksmart")
-    # the plan's faces are the four seen in the picks; of those, the three within 60 ft of
-    # the aisle front are golden (FF009A, 100 ft back, is not)
-    assert rs["golden_stops"] == ["S0", "S1", "S2"]
+    # the plan's faces are every structural face (all ten), picked or not; the seven within
+    # 60 ft of the aisle front are golden
+    assert rs["golden_stops"] == [f"S{k}" for k in range(7)]
 
 
 def test_abc_methods_record_that_they_use_the_golden_zone():
@@ -178,7 +178,7 @@ def _run_all_setup(tmp_path, outcome="adopted"):
     xw.to_csv(travel / CROSSWALK_FILE, index=False)
     pd.DataFrame({"stop_id": T.STOPS, "x_in": 180855.63, "y_in": [5120.0] + [5000 - 120 * k for k in range(10)],
                   "node_type": ["dispatch"] + ["rack"] * 10, "label": None}).to_csv(travel / "stops.csv", index=False)
-    T._pick_rows(T.PLAN, "2026-08-24").to_csv(tmp_path / "plan.csv", index=False)
+    T._pick_rows(T.PLAN, "2026-08-24").assign(CASES_PER_PALLET=60).to_csv(tmp_path / "plan.csv", index=False)
     week = pd.concat([T._pick_rows([([T.A, T.B, T.HOT], 6), ([T.A, T.B, T.QUIET], 2)], f"2026-10-{5 + d:02d}",
                                    transactions=True) for d in range(7)], ignore_index=True)
     week["NO"] = range(1, len(week) + 1)
@@ -212,6 +212,26 @@ def test_run_all_runs_every_policy_and_bundles(tmp_path):
     assert sorted(x["policy"] for x in b["runs"]) == ["abc_cost_test", "family_grouping", "racksmart", "static"]
     assert {x["leg_time_model"] for x in b["runs"]} == {"network_feet"}
     assert len({x["manifest"]["config_hash"] for x in b["runs"]}) == 4    # each run records its own policy
+
+
+def test_run_all_sensitivity_reruns_the_methods_with_pallet_fill_and_compares(tmp_path):
+    import subprocess
+    cfg = _run_all_setup(tmp_path)
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / "run_all.py"), "--config", str(cfg),
+                        "--policies", "static", "racksmart", "--sensitivity"], capture_output=True, text=True, cwd=REPO)
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    runs = tmp_path / "runs"
+    main = json.loads((runs / "sim_racksmart_network_feet_20261005_20261011" / "manifest.json").read_text())
+    pf = json.loads((runs / "sim_racksmart_network_feet_20261005_20261011_pallet_fill" / "manifest.json").read_text())
+    assert main["notebook_plan"]["move_cases"]["basis"] == "inventory_snapshot"
+    assert list(main["planning_inputs"]["lookahead_exceptions_used"]) == ["move_cases"]
+    assert pf["notebook_plan"]["move_cases"]["basis"] == "pallet_fill"
+    assert pf["planning_inputs"]["lookahead_exceptions_used"] == {}
+    assert not (runs / "sim_static_network_feet_20261005_20261011_pallet_fill").exists()
+    cmp_dir = runs / "compare_snapshot_vs_pallet_fill_20261005_20261011"
+    m = json.loads((cmp_dir / "manifest.json").read_text())
+    assert set(m["rankings"]) == {"notebook_net", "sim_busy"} and (cmp_dir / "comparison.csv").exists()
+    assert "ranking by notebook_net" in r.stdout
 
 
 def test_run_all_stops_before_simulating_when_the_model_is_not_adopted(tmp_path):

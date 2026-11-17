@@ -24,7 +24,8 @@ first pick. Every replay manifest records this (source.released_at).
 No lookahead
 ------------
 A policy may only use: (1) planning inputs that end at or before the run start
-(engine-checked through planning_inputs_end), (2) the orders that have already
+(engine-checked, input by input, through planning_inputs; an input past the run
+start must be named in config lookahead_exceptions), (2) the orders that have already
 been released, through the ArrivedOrders view, and (3) the order whose tour is
 starting. The view raises FutureAccessError for anything not yet released.
 tests/test_no_lookahead.py holds every policy to this.

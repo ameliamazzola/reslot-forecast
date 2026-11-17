@@ -47,9 +47,10 @@ class Policy:
         (reading a later one raises FutureAccessError). Default: nothing.
 
         No-lookahead contract: a policy may use only (1) planning inputs that
-        end at or before the run start -- set `planning_inputs_end` to their
-        exclusive end and the engine checks it -- (2) `view`, and (3) the order
-        whose tour is starting (route / location_for)."""
+        end at or before the run start -- list each in `planning_inputs`
+        ({name: {"end": ...}}) and the engine checks them; one past the run
+        start must be named in config lookahead_exceptions -- (2) `view`, and
+        (3) the order whose tour is starting (route / location_for)."""
 
     def route(self, locations: tuple, t: float) -> list[int]:
         """Order in which a tour's picks are visited, as positions into

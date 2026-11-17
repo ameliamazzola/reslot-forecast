@@ -3,7 +3,7 @@
 Run from the repo folder:
 
   python scripts/run_all.py [--refit DIR [--refit-config FILE]] [--config configs/sim.yaml]
-                            [--policies static racksmart ...] [--out FILE]
+                            [--policies static racksmart ...] [--out FILE] [--sensitivity]
 
 Steps, stopping at the first problem:
   1. --refit DIR   (optional) run DIR/scripts/refit_travel_feet.py with
@@ -16,6 +16,9 @@ Steps, stopping at the first problem:
   3. scripts/run_sim.py once per policy (default: static, abc_cost_test, family_grouping,
      racksmart -- the three UI tabs plus the static reference), same config.
   4. scripts/export_ui.py over those runs -> the bundle ui/index.html opens.
+  5. --sensitivity (optional): each notebook method again with
+     --move-cases pallet_fill (snapshot-free move cost; folders end _pallet_fill,
+     not bundled), then scripts/compare_runs.py: did the ranking change?
 
 Every step is the normal script, run as its own process, so each run writes
 its usual outputs and manifest.
@@ -43,6 +46,8 @@ ap.add_argument("--refit-config", metavar="FILE", help="travel config for the re
 ap.add_argument("--config", default="configs/sim.yaml")
 ap.add_argument("--policies", nargs="+", default=DEFAULT_POLICIES, choices=POLICIES)
 ap.add_argument("--out", help="bundle path (default: <paths.out>/bundle_<start>_<end>.json)")
+ap.add_argument("--sensitivity", action="store_true",
+                help="also run each notebook method with move_cases pallet_fill and compare the rankings")
 a = ap.parse_args()
 
 
@@ -78,7 +83,7 @@ tag = f"{w['start'].replace('-', '')}_{w['end'].replace('-', '')}"
 runs = []
 for i, pol in enumerate(a.policies, start=1):
     step(f"sim {i}/{len(a.policies)}: {pol}", [sys.executable, REPO / "scripts" / "run_sim.py", a.config, "--policy", pol])
-    run_dir = Path(cfg["paths"]["out"]) / f"sim_{pol}_{model.name}_{tag}"
+    run_dir = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, pol, model.name)
     if not (run_dir / "manifest.json").exists():
         raise SystemExit(f"stopped: expected {run_dir} after the {pol} run")
     runs.append(run_dir)
@@ -87,4 +92,15 @@ for i, pol in enumerate(a.policies, start=1):
 cmd = [sys.executable, REPO / "scripts" / "export_ui.py", *runs, "--travel", cfg["travel"]["dir"],
        "--out", a.out or str(Path(cfg["paths"]["out"]) / f"bundle_{tag}.json")]
 step("bundle for the UI", cmd)
+
+# 5. move-cost sensitivity
+if a.sensitivity:
+    methods = [p for p in a.policies if p != "static"]
+    for i, pol in enumerate(methods, start=1):
+        step(f"sensitivity {i}/{len(methods)}: {pol}, move_cases pallet_fill",
+             [sys.executable, REPO / "scripts" / "run_sim.py", a.config, "--policy", pol, "--move-cases", "pallet_fill"])
+    out = cfg["paths"]["out"]
+    step("compare: inventory snapshot vs pallet fill",
+         [sys.executable, REPO / "scripts" / "compare_runs.py", "--a", out, "--b", out, "--b-move-cases", "pallet_fill",
+          "--labels", "snapshot", "pallet_fill", "--config", a.config])
 print("\ndone: open ui/index.html and choose the bundle above.")

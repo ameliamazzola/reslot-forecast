@@ -609,6 +609,15 @@ function renderBars(r) {
     row.append(n, t, val); box.append(row);
   });
 }
+// Where the plan's case counts came from. Runs before the lookahead fix only name the snapshot file.
+function caseCounts(np, m, file) {
+  const mc = np.move_cases;
+  if (!mc) return 'inventory snapshot ' + file(np.inventory_snapshot);
+  if (mc.basis === 'pallet_fill') return `pallet size × ${mc.face_fill} fill (no snapshot)`;
+  const used = ((m.planning_inputs || {}).lookahead_exceptions_used || {});
+  const src = ((np.planning_inputs || {}).move_cases || {}).file;
+  return 'inventory snapshot ' + file(src) + ('move_cases' in used ? ' (taken after the run start: named exception)' : '');
+}
 function renderAssumptions(r) {
   const m = r.manifest, np = m.notebook_plan, k = np && np.notebook ? np.notebook.constants : null;
   const file = p => (p || '').split(/[\\/]/).pop();
@@ -622,7 +631,7 @@ function renderAssumptions(r) {
     ['Drop-off', m.drop_off_mode],
     ['Picks file', file(((m.inputs || [])[0] || {}).path)],
     ...(np ? [['Planned on', `${np.planning_window.start} to ${np.planning_window.end}`],
-              ['Inventory snapshot', file(np.inventory_snapshot)]] : []),
+              ['Case counts', caseCounts(np, m, file)]] : []),
     ...(k ? [['Wage (notebook)', '$' + k.WAGE.toFixed(2) + '/h'], ['Travel speed (notebook)', k.MPH + ' mph'],
              ['Move cost (notebook)', '$' + k.COST_PER_CASE + ' per case']] : []),
   ]);

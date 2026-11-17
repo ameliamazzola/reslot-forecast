@@ -1,4 +1,6 @@
 # %%
+import os
+import sys
 from pathlib import Path
 import pandas as pd
 from mlxtend.preprocessing import TransactionEncoder
@@ -9,6 +11,17 @@ DATA_DIR = PROJECT_ROOT / "data" / "raw"
 ARCHIVE_FILE = DATA_DIR / "yowmspd2_archive_picks_past_365days_ranon9.21.26.csv"
 CURRENT_FILE = DATA_DIR / "yowmspd2__picks_past_365days_ranon9.21.26.csv"
 print(ARCHIVE_FILE.exists(), CURRENT_FILE.exists())
+
+sys.path.insert(0, str(PROJECT_ROOT / "src" / "affinity"))
+from graph_export import DEFAULT_CUTOFF, file_sha16, write_meta
+
+# Data cutoff, EXCLUSIVE: only picks before this day are used. Default = the
+# simulator's run start (configs/sim.yaml window.start), so clusters used to plan
+# a re-slot never see the run. Override: set AFFINITY_CUTOFF=YYYY-MM-DD.
+# Recorded in affinity_meta.json and carried to sku_clusters_meta.json and
+# affinity_graph.json by affinity_graph.py.
+CUTOFF = pd.Timestamp(os.environ.get("AFFINITY_CUTOFF", DEFAULT_CUTOFF))
+print("cutoff (exclusive):", CUTOFF.date())
 
 # %%
 dtypes = {"ORD_NO": str, "FROM_ITEM": str}
@@ -25,6 +38,10 @@ picks = pd.concat([archive, current], ignore_index=True)
 picks["CREATE_DT"] = pd.to_datetime(picks["CREATE_DT"], format="%m/%d/%Y %I:%M:%S %p")
 
 print("combined:", picks.shape)
+n_before_cutoff = len(picks)
+picks = picks[picks["CREATE_DT"] < CUTOFF].reset_index(drop=True)
+n_after_cutoff = len(picks)
+print(f"before cutoff {CUTOFF.date()}: {n_after_cutoff:,} of {n_before_cutoff:,} rows")
 print("NO unique:", picks["NO"].is_unique)
 print("date range:", picks["CREATE_DT"].min(), "to", picks["CREATE_DT"].max())
 
@@ -161,6 +178,14 @@ out_dir = PROJECT_ROOT / "data" / "processed"
 out_dir.mkdir(parents=True, exist_ok=True)
 
 basket.to_pickle(out_dir / "basket_matrix.pkl")
+write_meta(out_dir / "affinity_meta.json", CUTOFF.date(),
+           made_by="src/affinity/build_matrix.py",
+           inputs={str(f.name): file_sha16(f) for f in (ARCHIVE_FILE, CURRENT_FILE)},
+           rows_read=n_before_cutoff, rows_before_cutoff=n_after_cutoff, rows_after_filters=len(picks),
+           picks_range=[str(picks["CREATE_DT"].min()), str(picks["CREATE_DT"].max())],
+           filters=filter_table.to_dict("records"),
+           basket={"orders": int(basket.shape[0]), "skus": int(basket.shape[1]),
+                   "sha256_16": file_sha16(out_dir / "basket_matrix.pkl")})
 print("saved to", out_dir)
 
 # %%
