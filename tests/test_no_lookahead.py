@@ -172,3 +172,43 @@ def test_every_planning_input_is_dated_and_checked(tmp_path):
     cfg["racksmart"]["move_cases"] = "pallet_fill"
     pol, _, _ = load_racksmart(cfg, n, method="racksmart")
     assert E.check_planning_inputs(pol, start, cfg["lookahead_exceptions"])["lookahead_exceptions_used"] == {}
+
+
+def _visited(cfg, n):
+    """The notebook's own `vis` (Planner.__init__ -> World.detour_ranking(train)), on
+    the train list every method gets, as face codes -> visit counts."""
+    from reslot.sim.racksmart import prepare_planning
+    nb, inp, train, _, _ = prepare_planning(cfg, n)
+    W = nb.World(inp.D, inp.depot, inp.cases, inp.golden, inp.dollars_per_unit, inp.cost_per_case)
+    faces = inp.extra["faces"]
+    return {faces[i]: v for i, v in nb.Planner(W, train).vis.items()}
+
+
+def _midnight_canary(path):
+    """One tour that starts in the planning month (Sep 20, 23:58) and runs past
+    midnight into the run (Sep 21) to a face the month never touched. This is the
+    path by which run-day picks could reach `vis`: the tour qualifies by its first
+    pick, so only cutting the read at the planning end keeps its later picks out.
+    Cut there, it has one visit and is dropped (< 3 visits)."""
+    df = pd.read_csv(path, dtype=str)
+    extra = df.head(3).copy()
+    extra["NO"] = [str(2 * 10**6 + k) for k in range(3)]
+    extra["CREATE_DT"] = [pd.Timestamp(t).strftime("%m/%d/%Y %I:%M:%S %p")
+                          for t in ("2026-09-20 23:58", "2026-09-21 00:01", "2026-09-21 00:03")]
+    extra["FROM_LOCATION"] = ["FF000A", "FF005A", "FF009A"]
+    extra["ORD_NO"], extra["USER_NAME"] = "888", "U_CANARY"
+    pd.concat([df, extra]).to_csv(path, index=False)
+
+
+def test_visited_counts_come_from_planning_month_picks_only(tmp_path):
+    cfg, n = _planning_cfg(tmp_path)
+    v0 = _visited(cfg, n)
+    _canary_rows(tmp_path / "plan.csv")                                 # tours starting on Sep 21
+    _midnight_canary(tmp_path / "plan.csv")                             # a tour crossing into Sep 21
+    v1 = _visited(cfg, n)
+    assert v0 == v1                                                     # canary rows change no count
+    raw = pd.read_csv(tmp_path / "plan.csv", dtype=str)
+    ts = pd.to_datetime(raw["CREATE_DT"], format="%m/%d/%Y %I:%M:%S %p")
+    planning_faces = set(raw.loc[ts < pd.Timestamp("2026-09-21"), "FROM_LOCATION"])
+    assert v1 and set(v1) <= planning_faces                             # every visited face was picked in the planning month
+    assert "FF005A" not in v1                                           # the canaries' new face
