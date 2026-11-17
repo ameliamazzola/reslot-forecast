@@ -2,10 +2,10 @@
 
 Run:  python scripts/export_ui.py RUN_DIR [RUN_DIR ...] [--travel DIR] [--out FILE]
 
-  RUN_DIR   runs/sim_<policy>_<model>_<start>_<end>/ from scripts/run_sim.py,
+  RUN_DIR   data/processed/sim/sim_<policy>_<model>_<start>_<end>/ from scripts/run_sim.py,
             all over the same window and network (e.g. static and racksmart)
   --travel  network outputs (default: travel.dir in configs/sim.yaml)
-  --out     default: data/processed/ui/bundle_<start>_<end>.json
+  --out     default: data/processed/sim/bundle_<start>_<end>.json
   --affinity  default: data/processed/affinity_graph.json (from src/affinity/affinity_graph.py)
 
 The bundle is derived from C&D data, so it goes under data/processed/
@@ -45,7 +45,7 @@ if affinity is None:
     print(f"no affinity graph at {aff_path}: run src/affinity/affinity_graph.py to add it")
 bundle = build_bundle(a.runs, net, stops, datetime.now(timezone.utc).isoformat(), hashes, affinity)
 w = bundle["window"]
-out = Path(a.out or f"data/processed/ui/bundle_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}.json")
+out = Path(a.out or f"data/processed/sim/bundle_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}.json")
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(bundle, separators=(",", ":"), allow_nan=False))
 print(f"{len(bundle['runs'])} run(s) [{', '.join(r['policy'] for r in bundle['runs'])}], "

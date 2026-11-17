@@ -59,7 +59,7 @@ def two_runs(tmp_path, monkeypatch):
     cfg["data"]["picks_path"] = str(tmp_path / "tx.csv")
     cfg["travel"]["dir"] = str(travel)
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
-    cfg["paths"]["runs"] = str(tmp_path / "runs")
+    cfg["paths"]["out"] = str(tmp_path / "runs")
     cfg["window"] = {"start": "2026-10-05", "end": "2026-10-11"}      # the synthetic week, not the repo's window
     cfg["racksmart"].update(notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None)
@@ -192,7 +192,7 @@ def _run_all_setup(tmp_path, outcome="adopted"):
     cfg["data"]["picks_path"] = str(tmp_path / "tx.csv")
     cfg["travel"]["dir"] = str(travel)
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
-    cfg["paths"]["runs"] = str(tmp_path / "runs")
+    cfg["paths"]["out"] = str(tmp_path / "runs")
     cfg["window"] = {"start": "2026-10-05", "end": "2026-10-11"}
     cfg["racksmart"].update(notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None)

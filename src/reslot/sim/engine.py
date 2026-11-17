@@ -84,9 +84,34 @@ LEG_COLUMNS = ["tour_id", "leg", "from_location", "to_location", "from_stop", "t
                "feet", "cross_aisle", "qty", "sim_s", "obs_s"]
 
 
-def simulate(tours, operators: int, policy, net: TravelNetwork, leg_model: LegTimeModel,
+class _Release(simpy.events.Event):
+    """An order's release, scheduled URGENT: at a tie with a tour ending (or any
+    other event) the release is handled first. That is the order the engine has
+    always had -- its arrival timers were all created at t=0, before any other
+    event, so they won every tie -- and keeps replay results unchanged."""
+
+    def __init__(self, env, delay: float):
+        super().__init__(env)
+        self._ok, self._value = True, None
+        env.schedule(self, simpy.events.URGENT, delay)
+
+
+def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegTimeModel,
              scope: dict, trip_ends: dict,
-             move_cost: Callable[[list], float] | None = None) -> SimResult:
+             move_cost: Callable[[list], float] | None = None,
+             env: simpy.Environment | None = None, observer: Callable[[str, dict], None] | None = None) -> SimResult:
+    """Run every order the source releases; one row per tour.
+
+    orders:   an OrderSource (anything with .orders()) or an iterable of Tours.
+              Orders are pulled one at a time in release order (arrival_s, then
+              tour_id); an order released earlier than the previous one is refused.
+    env:      the SimPy environment -- a plain Environment for replay (default),
+              a RealtimeEnvironment for live.
+    observer: optional callback(event, payload) for streaming ('release', 'start',
+              'leg', 'done'); it sees results only, never future orders.
+    """
+    from .orders import ArrivedOrders
+
     if int(operators) < 1:
         raise ValueError("operators must be at least 1")
     check_trip_ends(trip_ends, net)
@@ -94,9 +119,12 @@ def simulate(tours, operators: int, policy, net: TravelNetwork, leg_model: LegTi
     stop_of, aisle_of = faces["stop_id"].to_dict(), faces["aisle"].to_dict()
     start_stop, end_stop = trip_ends["start_stop"], trip_ends["end_stop"]
 
-    env = simpy.Environment()
+    env = env or simpy.Environment()
     pool = simpy.Resource(env, capacity=int(operators))
+    view = ArrivedOrders(env)
     tour_rows, leg_rows = [], []
+    emit = observer or (lambda event, payload: None)
+    on_arrival = getattr(policy, "on_arrival", None)
 
     def place(location: str) -> str:
         where = policy.location_for(location, env.now)
@@ -106,10 +134,10 @@ def simulate(tours, operators: int, policy, net: TravelNetwork, leg_model: LegTi
         return where
 
     def run(t):
-        yield env.timeout(t.arrival_s)
         with pool.request() as req:
             yield req
             start, busy_at_start = env.now, pool.count
+            emit("start", {"tour_id": t.tour_id, "t": start, "busy": busy_at_start})
             # Visit order: the policy's route (static: observed scan order).
             order = list(policy.route(tuple(p.location for p in t.picks), env.now))
             if sorted(order) != list(range(len(t.picks))):
@@ -139,6 +167,7 @@ def simulate(tours, operators: int, policy, net: TravelNetwork, leg_model: LegTi
                                  "sim_s": seconds, "obs_s": p.obs_leg_s if same_leg else None})
                 pick_feet += leg.feet
                 yield env.timeout(seconds)
+                emit("leg", {"tour_id": t.tour_id, "t": env.now, "to_stop": stop, "feet": leg.feet})
                 prev_j, prev_loc, prev_stop = j, loc, stop
             dispatch_feet += net.feet(prev_stop, end_stop)
             tour_rows.append({"tour_id": t.tour_id, "order_id": t.order_id, "user_id": t.user_id,
@@ -151,9 +180,28 @@ def simulate(tours, operators: int, policy, net: TravelNetwork, leg_model: LegTi
                               "busy_s": env.now - start, "obs_span_s": t.obs_span_s,
                               "pick_feet": pick_feet, "dispatch_feet": dispatch_feet,
                               "operators_busy_at_start": busy_at_start})
+            emit("done", {"tour_id": t.tour_id, "t": env.now, "first_stop": stop_of[first],
+                          "pick_feet": pick_feet})
 
-    for t in sorted(tours, key=lambda t: t.tour_id):
-        env.process(run(t))
+    def releases():
+        """Pull orders one at a time; release each at its time, then start its tour."""
+        stream = orders.orders() if hasattr(orders, "orders") else iter(
+            sorted(orders, key=lambda t: (t.arrival_s, t.tour_id)))
+        last = None
+        for t in stream:
+            key = (t.arrival_s, t.tour_id)
+            if last is not None and key < last:
+                raise ValueError(f"order {t.tour_id} released at {t.arrival_s}, before the previous order")
+            last = key
+            if t.arrival_s > env.now:
+                yield _Release(env, t.arrival_s - env.now)
+            view._release(t)
+            emit("release", {"tour_id": t.tour_id, "t": env.now, "n_picks": len(t.picks)})
+            if on_arrival is not None:
+                on_arrival(t, view)
+            env.process(run(t))
+
+    env.process(releases())
     env.run()
 
     moves = list(policy.moves())
@@ -264,19 +312,34 @@ class RunOutput:
     tours: list               # the workload's tours, as simulated
 
 
+def check_planning_inputs(policy, start: pd.Timestamp) -> None:
+    """No lookahead in planning: a policy that planned before the run must have
+    used inputs that end at or before the run start (planning_inputs_end is the
+    exclusive end of the data its plan saw)."""
+    end = getattr(policy, "planning_inputs_end", None)
+    if end is not None and pd.Timestamp(end) > start:
+        raise ValueError(f"policy {policy.name!r} planned on inputs up to {end}, after the run start {start}")
+
+
 def run(cfg: dict, events: pd.DataFrame, net: TravelNetwork, leg_model: LegTimeModel,
         policy=None, move_cost=None) -> RunOutput:
+    """One replay run from loaded inputs (the citable mode)."""
+    from .orders import ReplaySource
     from .policy import make_policy
-    from .workload import build_workload
 
     start, end = window_bounds(cfg)
     policy = policy or make_policy(cfg["policy"])
+    check_planning_inputs(policy, start)
     ends = cfg["trip_ends"]
-    work = build_workload(events, net, cfg["scope"], cfg["tour"], start, end)
-    res = simulate(work.tours, int(cfg["operators"]), policy, net, leg_model,
+    source = ReplaySource(events, net, cfg["scope"], cfg["tour"], start, end,
+                          picks_path=(cfg.get("data") or {}).get("picks_path"))
+    work = source.work
+    res = simulate(source, int(cfg["operators"]), policy, net, leg_model,
                    cfg["scope"], ends, move_cost=move_cost)
     t = res.tours
     extra = {
+        "mode": "replay",
+        "source": source.describe(),
         "window": {"start": cfg["window"]["start"], "end": cfg["window"]["end"],
                    "days": (end - start).days},
         "operators": int(cfg["operators"]),

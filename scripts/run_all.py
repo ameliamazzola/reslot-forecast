@@ -42,7 +42,7 @@ ap.add_argument("--refit", metavar="DIR", help="checkout of travel/refit-feet to
 ap.add_argument("--refit-config", metavar="FILE", help="travel config for the refit (default: DIR/configs/travel.yaml)")
 ap.add_argument("--config", default="configs/sim.yaml")
 ap.add_argument("--policies", nargs="+", default=DEFAULT_POLICIES, choices=POLICIES)
-ap.add_argument("--out", help="bundle path (default: data/processed/ui/bundle_<start>_<end>.json)")
+ap.add_argument("--out", help="bundle path (default: <paths.out>/bundle_<start>_<end>.json)")
 a = ap.parse_args()
 
 
@@ -78,14 +78,13 @@ tag = f"{w['start'].replace('-', '')}_{w['end'].replace('-', '')}"
 runs = []
 for i, pol in enumerate(a.policies, start=1):
     step(f"sim {i}/{len(a.policies)}: {pol}", [sys.executable, REPO / "scripts" / "run_sim.py", a.config, "--policy", pol])
-    run_dir = Path(cfg["paths"]["runs"]) / f"sim_{pol}_{model.name}_{tag}"
+    run_dir = Path(cfg["paths"]["out"]) / f"sim_{pol}_{model.name}_{tag}"
     if not (run_dir / "manifest.json").exists():
         raise SystemExit(f"stopped: expected {run_dir} after the {pol} run")
     runs.append(run_dir)
 
 # 4. bundle
-cmd = [sys.executable, REPO / "scripts" / "export_ui.py", *runs, "--travel", cfg["travel"]["dir"]]
-if a.out:
-    cmd += ["--out", a.out]
+cmd = [sys.executable, REPO / "scripts" / "export_ui.py", *runs, "--travel", cfg["travel"]["dir"],
+       "--out", a.out or str(Path(cfg["paths"]["out"]) / f"bundle_{tag}.json")]
 step("bundle for the UI", cmd)
 print("\ndone: open ui/index.html and choose the bundle above.")

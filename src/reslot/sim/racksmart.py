@@ -333,6 +333,8 @@ def load_racksmart(cfg: dict, net, sim_events: pd.DataFrame, method: str = "rack
     """Plan one notebook method; returns (policy, manifest info, input files)."""
     nb, inp, train, base, files = prepare_planning(cfg, net, sim_events)
     policy = plan_method(nb, inp, train, method)
+    # exclusive end of the planning tours; the engine refuses a plan that saw the run
+    policy.planning_inputs_end = pd.Timestamp(base["planning_inputs_end"])
     return policy, method_info(policy, base), files
 
 
@@ -373,6 +375,7 @@ def prepare_planning(cfg: dict, net, sim_events: pd.DataFrame):
     inp, train, built = build_inputs(nb, faces, net, cfg["trip_ends"]["start_stop"], inventory,
                                      clusters, plan_work.tours)
     base = {"notebook": nb.info, "planning_window": dict(rc["planning_window"]),
+            "planning_inputs_end": str(end),
             "planning_rows": {"read_window": [str(read[0].date()), str(read[1].date())],
                               "read": n_raw, "per_file": per_file, "after_dedup_by_event_id": len(planning)},
             "planning_workload": {k: plan_work.counts[k] for k in

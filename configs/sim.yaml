@@ -74,4 +74,4 @@ racksmart:
   clusters_path: data/processed/sku_clusters.csv                             # null = no clusters
 
 paths:
-  runs: runs
+  out: data/processed/sim       # every sim output (replay and live); gitignored, C&D-derived

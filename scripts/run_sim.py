@@ -7,7 +7,7 @@ Reads:
   <travel.dir>/stop_distance_ft.csv                 from build_travel_network.py
   <travel.dir>/location_stop_crosswalk.csv          from build_travel_network.py
 
-Writes runs/sim_<policy>_<leg model>_<start>_<end>/:
+Writes data/processed/sim/sim_<policy>_<leg model>_<start>_<end>/ (config paths.out):
   tours.csv           one row per tour: wait, busy, scan span, pick feet, dispatch feet
   legs.csv            one row per simulated pick-to-pick leg, with observed seconds
   dropped_picks.csv   every in-window case pick that could not be placed, with its reason
@@ -61,7 +61,7 @@ if policy is not None:
     x["notebook_plan"] = {**rs_info, "workbook_replay": RS.workbook_replay(policy, out.tours)}
 
 w = cfg["window"]
-run_dir = (Path(cfg["paths"]["runs"])
+run_dir = (Path(cfg["paths"]["out"])
            / f"sim_{x['policy']}_{x['leg_time_model']}_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}")
 run_dir.mkdir(parents=True, exist_ok=True)
 res.tours.to_csv(run_dir / "tours.csv", index=False)

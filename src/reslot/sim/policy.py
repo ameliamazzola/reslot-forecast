@@ -41,6 +41,16 @@ class Policy:
         """Every relocation made so far, in time order."""
         raise NotImplementedError
 
+    def on_arrival(self, order, view) -> None:
+        """Called when an order is released, before its tour starts. `view` is
+        the engine's ArrivedOrders: the orders released so far, nothing later
+        (reading a later one raises FutureAccessError). Default: nothing.
+
+        No-lookahead contract: a policy may use only (1) planning inputs that
+        end at or before the run start -- set `planning_inputs_end` to their
+        exclusive end and the engine checks it -- (2) `view`, and (3) the order
+        whose tour is starting (route / location_for)."""
+
     def route(self, locations: tuple, t: float) -> list[int]:
         """Order in which a tour's picks are visited, as positions into
         `locations` (the picks' observed locations, in scan order). Must be a

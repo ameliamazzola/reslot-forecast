@@ -14,7 +14,7 @@ All planned once on racksmart.planning_window (the month before Sep 21), on the
 same tours, Inputs and cost model; each scored on `window` (Oct 5-11) with the
 notebook's replay (feet x $/ft, $0.17/case). Needs no leg-time model.
 
-Writes runs/notebook_plans_<start>_<end>/:
+Writes data/processed/sim/notebook_plans_<start>_<end>/ (config paths.out):
   comparison.csv            one row per method (plus Do nothing), run_month's columns
   <method>_swaps.csv        the notebook's swap_list per method
   manifest.json             config hash, git SHA, input hashes, every plan and its scoring
@@ -46,7 +46,7 @@ start, end = window_bounds(cfg)
 week = build_workload(events, net, cfg["scope"], cfg["tour"], start, end)
 
 w = cfg["window"]
-run_dir = Path(cfg["paths"]["runs"]) / f"notebook_plans_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}"
+run_dir = Path(cfg["paths"]["out"]) / f"notebook_plans_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}"
 run_dir.mkdir(parents=True, exist_ok=True)
 rows, plans = [{"method": "Do nothing", "swaps": 0, "walking_cut_pct": 0.0, "gross_usd": 0.0,
                 "move_cost_usd": 0.0, "net_usd": 0.0}], {}

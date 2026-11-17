@@ -398,7 +398,7 @@ def test_window_dates_are_inclusive():
 
 def test_run_sim_refuses_before_reading_any_picks(tmp_path):
     c = cfg(data={"picks_path": str(tmp_path / "never_read.csv"), "ts_format": "%m/%d/%Y %I:%M:%S %p"},
-            travel={"dir": str(tmp_path)}, paths={"runs": str(tmp_path / "runs")})
+            travel={"dir": str(tmp_path)}, paths={"out": str(tmp_path / "runs")})
     (tmp_path / "sim.yaml").write_text(yaml.safe_dump(c))
     r = subprocess.run([sys.executable, str(REPO / "scripts" / "run_sim.py"), str(tmp_path / "sim.yaml")],
                        capture_output=True, text=True, cwd=REPO)
@@ -419,7 +419,7 @@ def test_run_sim_end_to_end_on_a_synthetic_transactions_export(travel_dir, tmp_p
                  ).to_csv(tmp_path / "tx.csv", index=False)
     c = cfg(leg_time={"model": "synthetic"},
             data={"picks_path": str(tmp_path / "tx.csv"), "ts_format": "%m/%d/%Y %I:%M:%S %p"},
-            travel={"dir": str(travel_dir)}, paths={"runs": str(tmp_path / "runs")})
+            travel={"dir": str(travel_dir)}, paths={"out": str(tmp_path / "runs")})
     (tmp_path / "sim.yaml").write_text(yaml.safe_dump(c))
     monkeypatch.setitem(E.LEG_TIME_MODELS, "synthetic", Synthetic)
     monkeypatch.setattr(sys, "argv", ["run_sim.py", str(tmp_path / "sim.yaml")])
