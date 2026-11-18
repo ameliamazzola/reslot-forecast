@@ -9,6 +9,15 @@ window:                    # inclusive days: four full weeks Mon Oct 12 - Sun No
 operators: 6               # reference: median distinct case pickers per clock hour, Oct 5-11
                            # (p90 9, max 12); swept later. Not a finding while dispatch legs are untimed.
                            # Measured on Oct 5-11. For this window: scripts/operators_per_hour.py.
+headline:                  # the primary result (src/reslot/sim/headline.py; decisions 2026-11-19)
+  # net labor savings = operator-hours saved vs static x W - move cost;
+  # payback days = move cost / (hours saved x W / window days)
+  labor_rate_usd_per_hour: 45.50     # W
+  labor_rate_source: >-
+    WAGE in the settings cell of notebooks/RackSmart_final.ipynb ($45.50/h), the rate the
+    notebook's own scoring uses. Its origin (loaded vs base wage, C&D or assumed) is not
+    documented in this repo; confirm before citing dollar figures.
+
 policy: static             # static = no re-slots; notebook methods (planned once, before the week,
                            # from the racksmart: block): racksmart | classic_abc | abc_cost_test | family_grouping
 
@@ -90,11 +99,11 @@ racksmart:
   #   same_event_id_share   at least 99.9% of matched legs carry the same transaction numbers
   #                         (NO): deduplication relies on it
   #   min_cover             the span both sides hold (first to last row) must be at least 80% of
-  #                         the configured one: catches a truncated export, while allowing the
-  #                         Sep-Oct export's possibly partial Oct 15 (>= 4.4 of 5.5 days)
+  #                         the configured span: catches a truncated export (Oct 10 noon - Oct 11:
+  #                         >= 28.8 of the 36 hours)
   # The deduplicated union of both sides must give the same legs as side a, same tolerance.
-  # The check reads Oct 12-15 rows of the second overlap to compare exports only; nothing it
-  # reads reaches the plan.
+  # Both overlaps end at or before the planning end (Oct 12): planning reads nothing at or
+  # after the run start, not even to compare exports.
   source_checks:
     tolerance: {count_rel: 0.001, matched_share: 0.999, seconds: 1, within_seconds_share: 0.999,
                 same_event_id_share: 0.999, min_cover: 0.8}
@@ -109,7 +118,7 @@ racksmart:
         a: [data/raw/transactions_0915_1015.csv]
         b: ["data/raw/Transactions 11-9-2026 thur 10-10.2026.csv"]
         start: "2026-10-10 12:00"      # the newer export starts at noon
-        end: "2026-10-16 00:00"        # through Oct 15; clipped to what both files hold
+        end: "2026-10-12 00:00"        # through Oct 11: nothing at or after the run start
   # Case counts at each face (the notebook's move cost and its tie-breaks):
   #   inventory_snapshot  the on-hand snapshot below. Taken AFTER the run start, so it is
   #                       a named lookahead exception (lookahead_exceptions.move_cases).

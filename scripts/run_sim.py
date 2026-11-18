@@ -16,7 +16,15 @@ the suffix marks a notebook method run with the snapshot-free move cost):
   swaps.csv           notebook methods only: the plan's swaps (notebook swap_list)
   golden_faces.csv    notebook methods only: the plan's golden-zone faces (nearest 10.8% to dispatch)
   manifest.json       config hash, git SHA, seed, input hashes, window, operators,
-                      dispatch_legs, drop_off_mode, workload counts, leg-model check
+                      dispatch_legs, drop_off_mode, workload counts, leg-model check,
+                      headline (net labor savings vs static, payback days)
+
+Headline (src/reslot/sim/headline.py): operator-hours saved vs static x W - move
+cost, and payback days; W = config headline.labor_rate_usd_per_hour. The static
+reference is the static run in the same output folder when it ran on the same
+window, operators, leg model, scope, trip ends and input files (run_all.py runs
+static first); otherwise static is simulated here on the same tours. The
+notebook's feet scoring is reported as the secondary figure.
 
 Refuses to run unless leg_time.model names a registered model that loads -- the
 network_feet model loads only if its refit was adopted by the 2026-11-02 review.
@@ -30,8 +38,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from reslot.config import load_config
 from reslot.io.wms_picks import load_wms_picks
 from reslot.sim import engine as E
+from reslot.sim import headline as H
+from reslot.sim.policy import make_policy
 from reslot.travel.artifacts import load_travel
-from reslot.utils.manifest import write_manifest
+from reslot.utils.manifest import file_hash, write_manifest
 
 ap = argparse.ArgumentParser(description="Replay one window of case-pick tours under one policy.")
 ap.add_argument("config", nargs="?", default="configs/sim.yaml")
@@ -46,6 +56,7 @@ if args.move_cases:
     cfg["racksmart"]["move_cases"] = args.move_cases
 try:
     leg_model = E.make_leg_model(cfg)
+    rate, rate_source = H.labor_rate(cfg)
 except ValueError as exc:
     raise SystemExit(f"not running: {exc}")
 
@@ -65,6 +76,28 @@ out = E.run(cfg, events, net, leg_model, policy=policy, move_cost=move_cost)
 x, res = out.extra, out.result
 if policy is not None:
     x["notebook_plan"] = {**rs_info, "workbook_replay": RS.workbook_replay(policy, out.tours)}
+
+# --- headline: net labor savings vs static ---------------------------------
+days = H.window_days(cfg["window"])
+hours = x["not_findings"]["busy_hours"]
+if x["policy"] == "static":
+    static_hours, ref = hours, {"from": "this run (static is the reference)"}
+else:
+    ref_dir = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, "static", x["leg_time_model"])
+    sm = H.read_static(ref_dir)
+    shared = [picks_path, net.sources["distance_table"], net.sources["crosswalk"], *getattr(leg_model, "files", [])]
+    why = ["no static run"] if sm is None else H.static_mismatch(sm, x, {Path(p).name: file_hash(p) for p in shared})
+    if not why:
+        static_hours = float(sm["not_findings"]["busy_hours"])
+        ref = {"from": str(ref_dir), "git_sha": sm.get("git_sha"), "git_dirty": sm.get("git_dirty")}
+    else:                                             # same tours, same leg model, no plan
+        st_out = E.run(cfg, events, net, leg_model, policy=make_policy("static"))
+        static_hours = st_out.extra["not_findings"]["busy_hours"]
+        ref = {"from": "simulated in this run", "why_not_the_static_folder": why}
+hl = H.headline(static_hours, hours, x["moves"]["cost"], rate, days)
+x["headline"] = {**hl, "labor_rate_source": rate_source, "static_reference": ref,
+                 "definition": H.DEFINITION, "caveat": H.CAVEAT,
+                 "secondary_notebook_net_usd": ((x.get("notebook_plan") or {}).get("workbook_replay") or {}).get("net_usd")}
 
 w = cfg["window"]
 run_dir = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, x["policy"], x["leg_time_model"])
@@ -98,13 +131,20 @@ if s["n_tours"]:
     print(f"  secondary {s['n_tours']:,} complete tours: median abs pct error {s['median_abs_pct_error']:.1%}, "
           f"total sim/obs {s['total_sim_over_obs']:.2f}")
 print(f"  [{chk['source']}] {chk['caveat']}")
+h = x["headline"]
+pb = ("no moves" if h["move_cost_usd"] <= 0 else "never (saves no hours)" if h["payback_days"] is None
+      else f"{h['payback_days']:.1f} days" + ("" if h["pays_back_in_window"] else f", longer than the {days}-day window"))
+print(f"\nHEADLINE net labor savings vs static: ${h['net_usd']:,.0f} over {days} days "
+      f"({h['operator_hours_saved']:+,.1f} operator-hours x ${rate:.2f}/h = ${h['labor_saved_usd']:,.0f}, "
+      f"move cost ${h['move_cost_usd']:,.0f}); payback {pb}")
+print(f"  W: {rate_source}. Static reference: {h['static_reference']['from']}. {H.CAVEAT}")
 if "notebook_plan" in x:
     rs = x["notebook_plan"]
     r = rs["workbook_replay"]
     print(f"\n{rs['label']} plan: {rs['plan']['swaps']} swaps"
           f"{' (blocked by backtest guard)' if rs['plan'].get('blocked_by_backtest_guard') else ''}, "
           f"move cost ${rs['move_cost_usd']:,.2f}")
-    print(f"  {r['what']}: driving cut {r['walking_cut_pct']}%, gross ${r['gross_usd']:,.0f}, "
+    print(f"  secondary -- {r['what']}: driving cut {r['walking_cut_pct']}%, gross ${r['gross_usd']:,.0f}, "
           f"net ${r['net_usd']:,.0f} on {r['tours']:,} tours")
     print(f"  not enforced: {'; '.join(rs['known_gaps'])}")
 used = x["planning_inputs"]["lookahead_exceptions_used"]

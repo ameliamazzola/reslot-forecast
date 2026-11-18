@@ -218,8 +218,8 @@ def test_compare_reports_each_policy_and_whether_the_ranking_changed(tmp_path):
     _manifest(a / "sim_racksmart_network_feet_20261005_20261011", "racksmart", -1.0, 1.0)      # other window
     _manifest(a / f"sim_racksmart_network_feet_{tag}_pallet_fill", "racksmart", 100.0, 99.0, basis="pallet_fill", used=())
     _manifest(a / f"sim_abc_cost_test_network_feet_{tag}_pallet_fill", "abc_cost_test", 200.0, 97.0, basis="pallet_fill", used=())
-    snap, _ = C.load_set(a, "2026-09-21", "2026-10-15")
-    pf, paths = C.load_set(a, "2026-09-21", "2026-10-15", "pallet_fill")
+    snap, _ = C.load_set(a, "2026-09-21", "2026-10-15", rate=45.5)
+    pf, paths = C.load_set(a, "2026-09-21", "2026-10-15", "pallet_fill", rate=45.5)
     assert snap.set_index("policy").at["racksmart", "notebook_net_usd"] == 500.0
     assert pf.set_index("policy").at["racksmart", "move_cases"] == "pallet_fill"
     assert pf.set_index("policy").at["static", "sim_busy_hours"] == 100.0      # static borrowed from the main run
@@ -227,11 +227,19 @@ def test_compare_reports_each_policy_and_whether_the_ranking_changed(tmp_path):
     table, rank = C.compare(snap, pf, "snapshot", "pallet_fill")
     assert rank["notebook_net"] == {"snapshot": ["racksmart", "abc_cost_test"],
                                     "pallet_fill": ["abc_cost_test", "racksmart"], "changed": True}
-    assert rank["sim_busy"]["changed"] is True
+    # headline (primary): static 100 h; racksmart 90 h, abc 95 h, each with 3 swaps = $30 of moves
+    assert list(rank) == ["headline_net", "notebook_net"]
+    s_ = snap.set_index("policy")
+    assert s_.at["racksmart", "headline_net_usd"] == pytest.approx(10 * 45.5 - 30)
+    assert s_.at["racksmart", "payback_days"] == pytest.approx(30 / (10 * 45.5 / 25))
+    assert rank["headline_net"] == {"snapshot": ["racksmart", "abc_cost_test"],
+                                    "pallet_fill": ["abc_cost_test", "racksmart"], "changed": True}
     row = table[(table.policy == "racksmart") & (table.metric == "notebook_net_usd")].iloc[0]
     assert row["change"] == -400.0
     _, rank_same = C.compare(snap, snap, "x", "y")
-    assert not rank_same["notebook_net"]["changed"] and not rank_same["sim_busy"]["changed"]
+    assert not rank_same["notebook_net"]["changed"] and not rank_same["headline_net"]["changed"]
+    no_rate, _ = C.load_set(a, "2026-09-21", "2026-10-15")                 # without W: notebook ranking only
+    assert list(C.compare(no_rate, no_rate, "x", "y")[1]) == ["notebook_net"]
     _manifest(b / f"sim_racksmart_network_feet_{tag}", "racksmart", 1.0, 1.0)
     with pytest.raises(ValueError, match="no static run"):
         C.load_set(b, "2026-09-21", "2026-10-15")

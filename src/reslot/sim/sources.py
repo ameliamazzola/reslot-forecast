@@ -167,11 +167,19 @@ def check_overlap(ov: dict, default_fmt: str, scope: dict, tol: dict) -> dict:
     return out
 
 
-def source_check(checks: dict | None, default_fmt: str, scope: dict) -> dict:
+def source_check(checks: dict | None, default_fmt: str, scope: dict, latest_end=None) -> dict:
     """Run every configured overlap; raise ValueError naming every failure.
-    checks: {tolerance: {...}, overlaps: [{name, a: [...], b: [...], start, end}]}."""
+    checks: {tolerance: {...}, overlaps: [{name, a: [...], b: [...], start, end}]}.
+    latest_end: no overlap may end after it (planning passes the planning end, so
+    the check reads nothing at or after the run start)."""
     if not checks or not checks.get("overlaps"):
         return {"overlaps": [], "note": "no overlaps configured"}
+    if latest_end is not None:
+        late = [f"{ov['name']} (ends {ov['end']})" for ov in checks["overlaps"]
+                if pd.Timestamp(ov["end"]) > pd.Timestamp(latest_end)]
+        if late:
+            raise ValueError(f"source_checks overlaps end after the planning end {latest_end}: {', '.join(late)}; "
+                             "planning reads nothing at or after the run start")
     tol = dict(checks["tolerance"])
     res = [check_overlap(ov, default_fmt, scope, tol) for ov in checks["overlaps"]]
     bad = [f"{r['name']}: {f}" for r in res for f in r["failures"]]

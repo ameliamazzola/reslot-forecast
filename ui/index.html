@@ -303,13 +303,24 @@ function renderHero(r) {
   } else {
     const sf = total(s, 'pick_feet'), saved = sf - feet, sh = total(s, 'sim_pick_seconds') / 3600;
     const p = pct(saved, sf);
-    // Headline: the notebook's driving cut (workbook_replay, whole run, dispatch trips
-    // included), on the same basis as the cost headline. Pick-to-pick stays as a row.
     const wr = (r.manifest.notebook_plan || {}).workbook_replay || {}, cut = wr.walking_cut_pct ?? 0;
-    setBig('hBig', Math.abs(cut).toFixed(1) + '%', cut >= 0 ? 'less driving' : 'more driving', cut > 0 ? 'good' : cut < 0 ? 'bad' : '');
-    $('hNote').textContent = `Notebook scoring over the whole run (${st.bundle.dates.length} days, ${num(wr.tours || 0)} tours), ` +
-      `trips to and from dispatch included. Pick to pick only, ${st.per === 'day' ? 'this day' : 'whole run'}: ` +
-      `${Math.abs(p).toFixed(1)}% ${saved >= 0 ? 'less' : 'more'} driving.`;
+    const h = r.manifest.headline;
+    if (h) {
+      // Headline basis (primary): operator-hours saved vs current slotting, whole run.
+      const hp = pct(h.operator_hours_saved, h.operator_hours_static);
+      setBig('hBig', Math.abs(h.operator_hours_saved).toFixed(1) + ' h',
+             (h.operator_hours_saved >= 0 ? 'fewer' : 'more') + ` operator-hours (${Math.abs(hp).toFixed(1)}%)`,
+             h.operator_hours_saved > 0 ? 'good' : h.operator_hours_saved < 0 ? 'bad' : '');
+      $('hNote').textContent = `Whole run, leg-time model, first to last pick scan (dispatch legs untimed). ` +
+        `Secondary, notebook feet scoring: ${Math.abs(cut).toFixed(1)}% ${cut >= 0 ? 'less' : 'more'} driving. ` +
+        `Pick to pick only, ${st.per === 'day' ? 'this day' : 'whole run'}: ${Math.abs(p).toFixed(1)}% ${saved >= 0 ? 'less' : 'more'} feet.`;
+    } else {
+      // Older bundles: the notebook's driving cut (workbook_replay, whole run, dispatch trips included).
+      setBig('hBig', Math.abs(cut).toFixed(1) + '%', cut >= 0 ? 'less driving' : 'more driving', cut > 0 ? 'good' : cut < 0 ? 'bad' : '');
+      $('hNote').textContent = `Notebook scoring over the whole run (${st.bundle.dates.length} days, ${num(wr.tours || 0)} tours), ` +
+        `trips to and from dispatch included. Pick to pick only, ${st.per === 'day' ? 'this day' : 'whole run'}: ` +
+        `${Math.abs(p).toFixed(1)}% ${saved >= 0 ? 'less' : 'more'} driving.`;
+    }
     $('vFeet').textContent = (saved >= 0 ? '−' : '+') + num(Math.abs(saved)) + ' ft';
     $('vHours').textContent = (sh - hrs >= 0 ? '−' : '+') + Math.abs(sh - hrs).toFixed(1) + ' h';
     $('vMove').textContent = fmt$(r.manifest.moves ? r.manifest.moves.cost : 0);
@@ -360,8 +371,34 @@ function renderCost(r) {
     $('cNote').textContent = `Pick-to-pick driving ${periodText()}, at the notebook's rate. Static moves nothing.`;
     setRows('cRows', [['Driving cost', fmt$(drive)], ['Move cost', fmt$(0)],
                       [`Simulated pick hours × $${k.WAGE.toFixed(2)}/h`, fmt$(hrs * k.WAGE)]]);
+  } else if (r.manifest.headline) {
+    // Headline (primary, decisions 2026-11-19): net labor savings = operator-hours saved vs
+    // static x W - move cost, and payback days, as run_sim.py wrote them (src/reslot/sim/headline.py).
+    // Whole run only: the move cost is one-time. The notebook's feet scoring is the secondary row.
+    const h = r.manifest.headline, days = h.window_days;
+    const wr = (r.manifest.notebook_plan || {}).workbook_replay || {};
+    setBig('cBig', fmt$(Math.abs(h.net_usd)), h.net_usd >= 0 ? 'net labor saved' : 'net labor lost',
+           h.net_usd > 0 ? 'good' : h.net_usd < 0 ? 'bad' : '');
+    const pbText = h.move_cost_usd <= 0 ? 'no moves to pay back'
+      : h.payback_days == null ? 'never: this plan saves no operator-hours'
+      : `${h.payback_days.toFixed(1)} days` + (h.pays_back_in_window ? '' : ` (longer than the ${days}-day run)`);
+    $('cTitle').textContent = `Net labor savings, ${pname(r.policy)}`;
+    $('cNote').textContent = `Whole run (${days} days): operator-hours saved against current slotting, ` +
+      `× $${h.labor_rate_usd_per_hour.toFixed(2)}/h, minus the plan's one-time move cost. ` +
+      `Payback: ${pbText}.`;
+    setRows('cRows', [
+      ['Payback period', pbText],
+      ['Operator-hours saved', (h.operator_hours_saved >= 0 ? '' : '−') + Math.abs(h.operator_hours_saved).toFixed(1) + ' h'],
+      [`× $${h.labor_rate_usd_per_hour.toFixed(2)}/h = labor saved`, fmt$(h.labor_saved_usd)],
+      ['Move cost (one time, whole plan)', fmt$(h.move_cost_usd)],
+      ['Net labor savings over the run', fmt$(h.net_usd)],
+      ['Secondary: notebook feet scoring, net', fmt$(wr.net_usd ?? 0)],
+      ['Secondary: notebook driving saved', fmt$(wr.gross_usd ?? 0)]]);
+    $('cModel').textContent = `W: ${h.labor_rate_source} Hours: leg model "${r.leg_time_model}". ${h.caveat}.`;
+    return;
   } else {
-    // Headline: the notebook's own net (workbook_replay, RackSmart_final.ipynb's replay and
+    // Older bundles (no headline in the manifest): the notebook's own net
+    // (workbook_replay, RackSmart_final.ipynb's replay and
     // cost model) over the whole run -- driving saved on the run's tours, trips to and from
     // dispatch included, minus the plan's one-time move cost. Whole run only: the notebook
     // scores the run, not single days.
@@ -402,7 +439,7 @@ function renderPlan(r) {
     $('pNote').textContent = 'Static never moves product: the slotting the site actually ran (2026-11-02).';
     setRows('pRows', []); $('pGapsWrap').hidden = true; return;
   }
-  const pl = np.plan, wr = np.workbook_replay || {};
+  const pl = np.plan, wr = np.workbook_replay || {}, hl = r.manifest.headline;
   setBig('pBig', num(pl.swaps), pl.swaps === 1 ? 'swap' : 'swaps');
   $('pNote').textContent = `Planned once on ${np.planning_window.start} to ${np.planning_window.end}, ` +
     `before the run, by ${np.label}.` + (pl.blocked_by_backtest_guard ? ' Blocked by the notebook\'s backtest guard.' : '');
@@ -410,6 +447,8 @@ function renderPlan(r) {
     ['Move cost ($0.17 per case)', fmt$(np.move_cost_usd)],
     ['Cost test', pl.cost_test === false ? 'no' : 'yes'],
     ['Backtest guard', 'blocked_by_backtest_guard' in pl ? (pl.blocked_by_backtest_guard ? 'blocked the plan' : 'passed') : 'not used'],
+    ...(hl ? [['Net labor savings (headline)', fmt$(hl.net_usd)],
+              ['Payback', hl.move_cost_usd <= 0 ? 'no moves' : hl.payback_days == null ? 'never' : hl.payback_days.toFixed(1) + ' days']] : []),
     ['Notebook scoring, driving cut', (wr.walking_cut_pct ?? 0).toFixed(1) + '%'],
     ['Notebook scoring, net', fmt$(wr.net_usd ?? 0)]]);
   $('pGapsWrap').hidden = false;

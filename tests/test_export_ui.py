@@ -145,6 +145,34 @@ def test_same_policy_twice_and_old_runs_are_refused(two_runs):
         _bundle(travel, [runs["static"]])
 
 
+def test_run_sim_writes_the_headline_against_the_static_run(two_runs, monkeypatch):
+    """Net labor savings = operator-hours saved vs static x W - move cost. The
+    static folder is the reference when it matches; with no static folder, static
+    is simulated in the run -- and gives the same hours."""
+    tmp_path, _, runs = two_runs
+    st = json.loads((runs["static"] / "manifest.json").read_text())
+    rs = json.loads((runs["racksmart"] / "manifest.json").read_text())
+    h, W = rs["headline"], 45.50
+    assert st["headline"]["operator_hours_saved"] == 0 and st["headline"]["net_usd"] == 0
+    assert h["static_reference"]["from"] == str(runs["static"])
+    assert h["operator_hours_static"] == st["not_findings"]["busy_hours"]
+    assert h["operator_hours_policy"] == rs["not_findings"]["busy_hours"]
+    saved = h["operator_hours_static"] - h["operator_hours_policy"]
+    assert saved > 0 and h["net_usd"] == pytest.approx(saved * W - rs["moves"]["cost"])
+    assert h["payback_days"] == pytest.approx(rs["moves"]["cost"] / (saved * W / 7)) and h["window_days"] == 7
+    assert h["secondary_notebook_net_usd"] == rs["notebook_plan"]["workbook_replay"]["net_usd"]
+    assert "WAGE" in h["labor_rate_source"] and "untimed" in h["caveat"]
+
+    cfg = yaml.safe_load((tmp_path / "racksmart.yaml").read_text())
+    cfg["paths"]["out"] = str(tmp_path / "alone")                          # no static folder there
+    (tmp_path / "alone.yaml").write_text(yaml.safe_dump(cfg))
+    _run_script("run_sim.py", ["run_sim.py", str(tmp_path / "alone.yaml")], monkeypatch)
+    alone = json.loads((tmp_path / "alone" / runs["racksmart"].name / "manifest.json").read_text())["headline"]
+    assert alone["static_reference"]["from"] == "simulated in this run"
+    assert alone["operator_hours_static"] == pytest.approx(h["operator_hours_static"])
+    assert alone["net_usd"] == pytest.approx(h["net_usd"])
+
+
 def test_golden_zone_reaches_the_bundle_only_for_methods_that_use_it(two_runs):
     _, travel, runs = two_runs
     assert (runs["racksmart"] / "golden_faces.csv").exists()            # written for every notebook method
@@ -234,8 +262,10 @@ def test_run_all_sensitivity_reruns_the_methods_with_pallet_fill_and_compares(tm
     assert not (runs / "sim_static_network_feet_20261005_20261011_pallet_fill").exists()
     cmp_dir = runs / "compare_snapshot_vs_pallet_fill_20261005_20261011"
     m = json.loads((cmp_dir / "manifest.json").read_text())
-    assert set(m["rankings"]) == {"notebook_net", "sim_busy"} and (cmp_dir / "comparison.csv").exists()
-    assert "ranking by notebook_net" in r.stdout
+    assert list(m["rankings"]) == ["headline_net", "notebook_net"] and (cmp_dir / "comparison.csv").exists()
+    assert m["primary_ranking"] == "headline_net" and m["headline"]["labor_rate_usd_per_hour"] == 45.5
+    assert "PRIMARY ranking by headline_net" in r.stdout and "secondary ranking by notebook_net" in r.stdout
+    assert "HEADLINE net labor savings vs static" in r.stdout
 
 
 def test_run_all_stops_before_simulating_when_the_model_is_not_adopted(tmp_path):

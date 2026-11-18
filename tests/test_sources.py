@@ -138,6 +138,20 @@ def test_planning_refuses_when_the_exports_disagree(tmp_path):
         RS.load_racksmart(cfg, n)
 
 
+def test_no_overlap_may_end_after_the_planning_end(tmp_path):
+    """Planning reads nothing at or after the run start, not even to compare exports."""
+    chk = overlap(tmp_path, report(), as_transactions(report()))
+    with pytest.raises(ValueError, match="end after the planning end"):
+        S.source_check(chk, FMT, SCOPE, latest_end=f"{DAY} 12:00")
+    assert S.source_check(chk, FMT, SCOPE, latest_end=f"{DAY} 18:00")["overlaps"][0]["ok"]
+    cfg, n = NL._planning_cfg(tmp_path)                                   # planning ends Sep 21
+    late = overlap(tmp_path, report(), as_transactions(report()))
+    late["overlaps"][0]["end"] = "2026-09-21 00:00:01"
+    cfg["racksmart"]["source_checks"] = late
+    with pytest.raises(ValueError, match="end after the planning end"):
+        RS.load_racksmart(cfg, n)
+
+
 def test_planning_reads_both_formats_and_counts_each_pick_once(tmp_path):
     cfg, n = NL._planning_cfg(tmp_path)
     plan = report()
@@ -175,5 +189,10 @@ def test_repo_config_runs_four_weeks_after_a_30_day_plan():
     rc = cfg["racksmart"]
     assert rc["planning_window"] == {"start": "2026-09-12", "end": "2026-10-11"}
     assert len(S.entry_paths(rc["planning_picks"])) == 4 and cfg["data"]["picks_path"] in rc["planning_picks"]
-    assert [o["name"] for o in rc["source_checks"]["overlaps"]] == ["365day_vs_sep_oct", "sep_oct_vs_oct_nov"]
+    ovs = rc["source_checks"]["overlaps"]
+    assert [o["name"] for o in ovs] == ["365day_vs_sep_oct", "sep_oct_vs_oct_nov"]
+    assert ovs[1]["start"] == "2026-10-10 12:00" and ovs[1]["end"] == "2026-10-12 00:00"
+    plan_end = pd.Timestamp(rc["planning_window"]["end"]) + pd.Timedelta(days=1)
+    assert all(pd.Timestamp(o["end"]) <= plan_end == pd.Timestamp(cfg["window"]["start"]) for o in ovs)
+    assert cfg["headline"]["labor_rate_usd_per_hour"] == 45.5 and "WAGE" in cfg["headline"]["labor_rate_source"]
     assert "move_cases" in cfg["lookahead_exceptions"] and "8 days after" in cfg["lookahead_exceptions"]["move_cases"]

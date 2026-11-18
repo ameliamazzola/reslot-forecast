@@ -106,7 +106,8 @@ def sim(tours, net, operators=6, policy=None, model=None, ends=ENDS, **kw):
 def cfg(**over):
     c = {"seed": 1, "window": {"start": "2026-10-05", "end": "2026-10-11"}, "operators": 6,
          "policy": "static", "scope": dict(SCOPE), "tour": dict(TOUR), "leg_time": {"model": None},
-         "trip_ends": dict(ENDS), "leg_model_check": dict(CHECK)}
+         "trip_ends": dict(ENDS), "leg_model_check": dict(CHECK),
+         "headline": {"labor_rate_usd_per_hour": 45.5, "labor_rate_source": "test rate"}}
     c.update(over)
     return c
 
@@ -431,4 +432,5 @@ def test_run_sim_end_to_end_on_a_synthetic_transactions_export(travel_dir, tmp_p
     m = json.loads((run_dir / "manifest.json").read_text())
     assert m["workload"]["picks_kept"] == 3 and m["workload"]["dropped_by_reason"] == {"check_snap": 1}
     assert len(m["inputs"]) == 3 and all(i["sha256_16"] for i in m["inputs"])
+    assert m["headline"]["operator_hours_saved"] == 0 and m["headline"]["labor_rate_source"] == "test rate"
     assert pd.read_csv(run_dir / "dropped_picks.csv")["from_loc"].tolist() == ["XY160A"]

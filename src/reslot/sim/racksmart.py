@@ -650,9 +650,9 @@ def prepare_planning(cfg: dict, net):
     # the planning end is read: a tour that runs past it is cut there.
     read = (start - pd.Timedelta(days=1), end)
     # The exports must agree where they overlap before their union is trusted
-    # (sources.source_check); it refuses to plan otherwise. What it reads is
-    # compared and discarded: none of it reaches the plan.
-    checks = S.source_check(rc.get("source_checks"), rc["planning_ts_format"], scope)
+    # (sources.source_check); it refuses to plan otherwise. Overlaps may not end
+    # after the planning end, and what the check reads never reaches the plan.
+    checks = S.source_check(rc.get("source_checks"), rc["planning_ts_format"], scope, latest_end=end)
     planning, file_info = S.read_picks(rc["planning_picks"], rc["planning_ts_format"], read)
     per_file = {p: i["rows"] for p, i in file_info.items()}
     if planning.empty:

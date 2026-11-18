@@ -5,14 +5,17 @@ Used for (scripts/compare_runs.py):
   sensitivity      the same commit, move_cases inventory_snapshot vs pallet_fill
 
 A set is the run_sim.py output folders in one directory for one window. Every
-number is read from the runs' manifests; nothing is recomputed. Static is the
-reference inside each set (it has no plan, so it is the same under both
-move_cases settings and a pallet_fill set borrows the main static run).
+input number is read from the runs' manifests. Static is the reference inside
+each set (it has no plan, so it is the same under both move_cases settings and
+a pallet_fill set borrows the main static run). The headline is computed from
+those numbers with the same function run_sim.py uses (src/reslot/sim/headline.py),
+against the set's own static run, so runs from before the headline existed
+compare too.
 
 Two rankings are reported, best first, over the notebook methods in both sets:
-  notebook_net   the notebook's own scoring on the run's tours (net $), as the UI headline
-  sim_busy       SimPy operator busy hours saved vs static (not a finding while
-                 dispatch legs are untimed -- reported only to see if it moves)
+  headline_net   PRIMARY: net labor savings = operator-hours saved vs static x W
+                 - move cost (with payback days in the table)
+  notebook_net   secondary: the notebook's own feet scoring on the run's tours (net $)
 """
 from __future__ import annotations
 
@@ -21,11 +24,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import headline as H
+
 VARIANT_SUFFIX = {"inventory_snapshot": "", "pallet_fill": "_pallet_fill"}
 COLUMNS = ["policy", "swaps", "faces", "faces_with_cluster", "move_cases", "lookahead_exceptions_used",
            "move_cost_usd", "notebook_driving_cut_pct", "notebook_gross_usd", "notebook_net_usd",
            "sim_pick_feet", "sim_pick_feet_saved_vs_static", "sim_busy_hours", "sim_busy_hours_saved_vs_static",
-           "git_sha", "git_dirty"]
+           "labor_saved_usd", "headline_net_usd", "payback_days", "git_sha", "git_dirty"]
+RANKINGS = (("headline_net", "headline_net_usd"), ("notebook_net", "notebook_net_usd"))   # primary first
 
 
 def _summary(m: dict) -> dict:
@@ -51,9 +57,11 @@ def _summary(m: dict) -> dict:
     }
 
 
-def load_set(directory, start: str, end: str, move_cases: str = "inventory_snapshot") -> tuple[pd.DataFrame, list]:
+def load_set(directory, start: str, end: str, move_cases: str = "inventory_snapshot",
+             rate: float | None = None) -> tuple[pd.DataFrame, list]:
     """One row per policy run in `directory` for window [start, end] with the given
-    move_cases variant (static: always the main run). Returns (table, manifest paths)."""
+    move_cases variant (static: always the main run). Returns (table, manifest paths).
+    rate: W ($ per operator-hour) for the headline; None leaves the headline columns empty."""
     if move_cases not in VARIANT_SUFFIX:
         raise ValueError(f"move_cases must be one of {sorted(VARIANT_SUFFIX)}")
     tag = f"_{start.replace('-', '')}_{end.replace('-', '')}"
@@ -82,6 +90,12 @@ def load_set(directory, start: str, end: str, move_cases: str = "inventory_snaps
     ref = t.set_index("policy").loc["static"]
     t["sim_pick_feet_saved_vs_static"] = ref["sim_pick_feet"] - t["sim_pick_feet"]
     t["sim_busy_hours_saved_vs_static"] = ref["sim_busy_hours"] - t["sim_busy_hours"]
+    days = H.window_days({"start": start, "end": end})
+    hl = [H.headline(ref["sim_busy_hours"], h, c, rate, days) if rate else {}
+          for h, c in zip(t["sim_busy_hours"], t["move_cost_usd"])]
+    t["labor_saved_usd"] = [x.get("labor_saved_usd") for x in hl]
+    t["headline_net_usd"] = [x.get("net_usd") for x in hl]
+    t["payback_days"] = [x.get("payback_days") for x in hl]
     return t[COLUMNS].sort_values("policy").reset_index(drop=True), paths
 
 
@@ -92,7 +106,8 @@ def ranking(t: pd.DataFrame, by: str) -> list:
 
 
 def compare(a: pd.DataFrame, b: pd.DataFrame, label_a: str, label_b: str) -> tuple[pd.DataFrame, dict]:
-    """Side-by-side table (policy x metric, a / b / b - a) and the two rankings."""
+    """Side-by-side table (policy x metric, a / b / b - a) and the rankings
+    (headline_net first when both sets carry it, then notebook_net)."""
     common = sorted(set(a["policy"]) & set(b["policy"]))
     if len(common) < 2:
         raise ValueError(f"need at least static and one method in both sets; in both: {common}")
@@ -106,14 +121,17 @@ def compare(a: pd.DataFrame, b: pd.DataFrame, label_a: str, label_b: str) -> tup
                          "change": (vb - va) if num and pd.notna(va) and pd.notna(vb) else None})
     table = pd.DataFrame(rows)
     rank = {}
-    for by, col in (("notebook_net", "notebook_net_usd"), ("sim_busy", "sim_busy_hours_saved_vs_static")):
+    for by, col in RANKINGS:
+        if a[col].isna().all() or b[col].isna().all():
+            continue
         ra, rb = ranking(a.reset_index(), col), ranking(b.reset_index(), col)
         rank[by] = {label_a: ra, label_b: rb, "changed": ra != rb}
     return table, rank
 
 
 def wide(a: pd.DataFrame, b: pd.DataFrame, label_a: str, label_b: str,
-         metrics=("swaps", "faces", "move_cost_usd", "notebook_net_usd", "sim_busy_hours_saved_vs_static")) -> pd.DataFrame:
+         metrics=("swaps", "move_cost_usd", "sim_busy_hours_saved_vs_static", "headline_net_usd", "payback_days",
+                  "notebook_net_usd")) -> pd.DataFrame:
     """One row per policy, chosen metrics as <metric> [a] / [b] -- for printing."""
     common = sorted(set(a["policy"]) & set(b["policy"]))
     a, b = (x.set_index("policy").loc[common] for x in (a, b))
