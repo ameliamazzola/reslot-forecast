@@ -127,12 +127,19 @@ def _planning(tmp_path):
     return NL._planning_cfg(tmp_path)
 
 
-def test_clusters_place_faces_by_the_last_item_picked_there(tmp_path):
+def test_clusters_place_faces_by_the_notebooks_rule_on_planning_picks(tmp_path):
+    """location_clusters (the notebook's): a face takes the cluster of the item
+    with the most cases picked there in the planning window -- the adapter only
+    supplies the planning picks (extra["sku"]) and the file path."""
     cfg, n = _planning(tmp_path)
     cfg["racksmart"]["clusters_path"] = str(_clusters(tmp_path))     # SKU "1" = the item in every planning pick
     pol, info, files = RS.load_racksmart(cfg, n)
     picked = {TR.A, TR.B, TR.HOT, TR.QUIET}
-    assert {pol.faces[i] for i in pol.inp.extra["loc_cluster"]} == picked
+    (label,) = pol.inp.tours_by_period
+    lc = pol.nb.location_clusters(pol.inp, [label], pol.inp.tours_by_period[label])
+    assert {pol.faces[i] for i in lc} == picked and pol.plan["faces_with_cluster"] == len(picked)
+    assert set(pol.inp.extra["sku"]["month"]) == {"2026-08-21"} and pol.nb.CLUSTERS == cfg["racksmart"]["clusters_path"]
+    assert pol.planning_inputs["clusters"]["face_items_end"] == "2026-09-21 00:00:00"
     assert pol.planning_inputs["clusters"]["end"] == "2026-09-21 00:00:00" and str(cfg["racksmart"]["clusters_path"]) in files
     E.check_planning_inputs(pol, pd.Timestamp("2026-09-21"), cfg["lookahead_exceptions"])
 

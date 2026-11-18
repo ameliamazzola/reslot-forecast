@@ -60,8 +60,9 @@ leg_model_check:
 racksmart:
   # Planning inputs shared by every notebook method (policy: racksmart, classic_abc,
   # abc_cost_test, family_grouping) and scripts/plan_policies.py. The algorithms and their
-  # cost model (WAGE, MPH, COST_PER_CASE, DEMAND_SCALE, COST_MULT) are the notebook's,
-  # run unchanged; nothing here re-tunes them.
+  # cost model (WAGE, MPH, COST_PER_CASE) and tuned SETTINGS are the notebook's, run
+  # unchanged; nothing here re-tunes them. The paths below replace the notebook's file
+  # settings (CLUSTERS, RACK_HEIGHTS, CASES_PER_PALLET, REFILL_ORIGIN).
   notebook: notebooks/RackSmart_final.ipynb
   planning_window:                     # the month before Sep 21 (inclusive days)
     start: "2026-08-21"
@@ -86,6 +87,20 @@ racksmart:
   # Affinity clusters. Must have sku_clusters_meta.json beside it (written by
   # src/affinity/affinity_graph.py) with a data cutoff at or before the run start.
   clusters_path: data/processed/sku_clusters.csv                             # null = no clusters
+  # RackSmart's swap groups (the notebook's RACK_HEIGHTS rule, SHORT/TALL), derived from the
+  # location master's putaway zone: PY.. = TALL, PZ.. = SHORT. Structural input (same file
+  # as configs/travel.yaml locations_path). null = aisle fence only, PY/PZ not enforced.
+  # The comparison methods use no swap groups either way.
+  rack_heights:
+    location_master: data/raw/yowmspd2_locations_9.14.26.csv
+  # RackSmart's refill-trip cost (notebook SETTINGS refill=True). OFF until the refill files'
+  # date range is confirmed (team decision 2026-11-18); every RackSmart manifest records that
+  # this differs from the notebook's tuned run. as_of = the last date of the data the files
+  # were derived from; required when on, and checked against the run start like any input.
+  refill:
+    cases_per_pallet_path: null        # item, cases_per_pallet
+    origin_path: null                  # item, origin_location ("__default__" row = fallback)
+    as_of: null
 
 # Planning inputs allowed to end after the run start, by name, with the reason.
 # The engine refuses any other planning input that ends after the run start, and

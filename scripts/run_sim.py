@@ -14,7 +14,7 @@ the suffix marks a notebook method run with the snapshot-free move cost):
   legs.csv            one row per simulated pick-to-pick leg, with observed seconds
   dropped_picks.csv   every in-window case pick that could not be placed, with its reason
   swaps.csv           notebook methods only: the plan's swaps (notebook swap_list)
-  golden_faces.csv    notebook methods only: the plan's golden-zone faces (60 ft rule)
+  golden_faces.csv    notebook methods only: the plan's golden-zone faces (nearest 10.8% to dispatch)
   manifest.json       config hash, git SHA, seed, input hashes, window, operators,
                       dispatch_legs, drop_off_mode, workload counts, leg-model check
 

@@ -2,8 +2,9 @@
 
 Run:  python scripts/plan_policies.py [configs/sim.yaml]
 
-Runs notebooks/RackSmart_final.ipynb's algorithm cells unchanged (see
-src/reslot/sim/racksmart.py) for each method its run_month compares:
+Runs notebooks/RackSmart_final.ipynb's algorithm definitions unchanged (see
+src/reslot/sim/racksmart.py): RackSmart through the notebook's own plan_month,
+the comparison methods wired as the previous notebook's run_month wired them:
 
   racksmart         RackSmart (final)
   classic_abc       Classic ABC (no cost test)
@@ -15,7 +16,7 @@ same tours, Inputs and cost model; each scored on `window` (Oct 5-11) with the
 notebook's replay (feet x $/ft, $0.17/case). Needs no leg-time model.
 
 Writes data/processed/sim/notebook_plans_<start>_<end>/ (config paths.out):
-  comparison.csv            one row per method (plus Do nothing), run_month's columns
+  comparison.csv            one row per method (plus Do nothing), check_month's columns
   <method>_swaps.csv        the notebook's swap_list per method
   manifest.json             config hash, git SHA, input hashes, every plan and its scoring
 """

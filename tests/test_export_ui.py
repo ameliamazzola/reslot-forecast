@@ -44,8 +44,8 @@ def two_runs(tmp_path, monkeypatch):
     D, xw = T.network()
     D.to_csv(travel / DISTANCE_FILE)
     xw.to_csv(travel / CROSSWALK_FILE, index=False)
-    pd.DataFrame({"stop_id": T.STOPS, "x_in": 180855.63, "y_in": [5120.0] + [5000 - 120 * k for k in range(10)],
-                  "node_type": ["dispatch"] + ["rack"] * 10, "label": None}).to_csv(travel / "stops.csv", index=False)
+    pd.DataFrame({"stop_id": T.STOPS, "x_in": 180855.63, "y_in": [5120.0] + [5000 - 120 * k for k in range(T.N_FACES)],
+                  "node_type": ["dispatch"] + ["rack"] * T.N_FACES, "label": None}).to_csv(travel / "stops.csv", index=False)
     T._pick_rows(T.PLAN, "2026-08-24").assign(CASES_PER_PALLET=60).to_csv(tmp_path / "plan.csv", index=False)
     week = pd.concat([T._pick_rows([([T.A, T.B, T.HOT], 10), ([T.A, T.B, T.QUIET], 2)], f"2026-10-{5 + d:02d}",
                                    transactions=True) for d in range(7)], ignore_index=True)
@@ -62,7 +62,8 @@ def two_runs(tmp_path, monkeypatch):
     cfg["paths"]["out"] = str(tmp_path / "runs")
     cfg["window"] = {"start": "2026-10-05", "end": "2026-10-11"}      # the synthetic week, not the repo's window
     cfg["racksmart"].update(notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
-                            inventory_path=str(tmp_path / "inv.csv"), clusters_path=None)
+                            inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
+                            rack_heights={"location_master": str(T.location_master(tmp_path))})
     for pol in ("static", "racksmart"):
         cfg["policy"] = pol
         (tmp_path / f"{pol}.yaml").write_text(yaml.safe_dump(cfg))
@@ -154,9 +155,9 @@ def test_golden_zone_reaches_the_bundle_only_for_methods_that_use_it(two_runs):
     j["notebook_plan"]["uses_golden_zone"] = True                         # as the ABC methods record it
     m.write_text(json.dumps(j))
     rs = next(r for r in _bundle(travel, runs.values())["runs"] if r["policy"] == "racksmart")
-    # the plan's faces are every structural face (all ten), picked or not; the seven within
-    # 60 ft of the aisle front are golden
-    assert rs["golden_stops"] == [f"S{k}" for k in range(7)]
+    # the plan's faces are every structural face (all fifty), picked or not; the nearest
+    # 10.8% to dispatch (five) are golden
+    assert rs["golden_stops"] == [f"S{k}" for k in range(5)]
 
 
 def test_abc_methods_record_that_they_use_the_golden_zone():
@@ -176,8 +177,8 @@ def _run_all_setup(tmp_path, outcome="adopted"):
     D, xw = T.network()
     D.to_csv(travel / DISTANCE_FILE)
     xw.to_csv(travel / CROSSWALK_FILE, index=False)
-    pd.DataFrame({"stop_id": T.STOPS, "x_in": 180855.63, "y_in": [5120.0] + [5000 - 120 * k for k in range(10)],
-                  "node_type": ["dispatch"] + ["rack"] * 10, "label": None}).to_csv(travel / "stops.csv", index=False)
+    pd.DataFrame({"stop_id": T.STOPS, "x_in": 180855.63, "y_in": [5120.0] + [5000 - 120 * k for k in range(T.N_FACES)],
+                  "node_type": ["dispatch"] + ["rack"] * T.N_FACES, "label": None}).to_csv(travel / "stops.csv", index=False)
     T._pick_rows(T.PLAN, "2026-08-24").assign(CASES_PER_PALLET=60).to_csv(tmp_path / "plan.csv", index=False)
     week = pd.concat([T._pick_rows([([T.A, T.B, T.HOT], 6), ([T.A, T.B, T.QUIET], 2)], f"2026-10-{5 + d:02d}",
                                    transactions=True) for d in range(7)], ignore_index=True)
@@ -195,7 +196,8 @@ def _run_all_setup(tmp_path, outcome="adopted"):
     cfg["paths"]["out"] = str(tmp_path / "runs")
     cfg["window"] = {"start": "2026-10-05", "end": "2026-10-11"}
     cfg["racksmart"].update(notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
-                            inventory_path=str(tmp_path / "inv.csv"), clusters_path=None)
+                            inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
+                            rack_heights={"location_master": str(T.location_master(tmp_path))})
     (tmp_path / "sim.yaml").write_text(yaml.safe_dump(cfg))
     return tmp_path / "sim.yaml"
 

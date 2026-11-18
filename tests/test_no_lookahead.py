@@ -113,7 +113,8 @@ def _planning_cfg(tmp_path):
     cfg = yaml.safe_load((TS.REPO / "configs" / "sim.yaml").read_text())
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
     cfg["racksmart"].update(notebook=str(TR.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
-                            inventory_path=str(tmp_path / "inv.csv"), clusters_path=None)
+                            inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
+                            rack_heights={"location_master": str(TR.location_master(tmp_path))})
     return cfg, TravelNetwork(D, xw)
 
 
@@ -161,8 +162,9 @@ def test_every_planning_input_is_dated_and_checked(tmp_path):
     cfg, n = _planning_cfg(tmp_path)
     pol, _, _ = load_racksmart(cfg, n, method="racksmart")
     ins = pol.planning_inputs
-    assert set(ins) == {"planning_picks", "faces", "face_items", "move_cases"}
+    assert set(ins) == {"planning_picks", "faces", "face_items", "move_cases", "rack_heights"}
     assert ins["faces"]["end"] is None and ins["faces"]["structural"]
+    assert ins["rack_heights"]["end"] is None and ins["rack_heights"]["structural"]   # location master
     assert ins["planning_picks"]["end"] == ins["face_items"]["end"] == "2026-09-21 00:00:00"
     start = pd.Timestamp(cfg["window"]["start"])
     with pytest.raises(ValueError, match="move_cases"):                         # snapshot is after the run start
