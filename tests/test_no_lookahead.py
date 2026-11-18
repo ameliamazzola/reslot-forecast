@@ -112,7 +112,9 @@ def _planning_cfg(tmp_path):
     TR.inventory().to_csv(tmp_path / "inv.csv", index=False)
     cfg = yaml.safe_load((TS.REPO / "configs" / "sim.yaml").read_text())
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
-    cfg["racksmart"].update(notebook=str(TR.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
+    cfg["window"] = {"start": "2026-09-21", "end": "2026-10-15"}         # the run these synthetic tests replay
+    cfg["racksmart"].update(planning_window={"start": "2026-08-21", "end": "2026-09-20"}, source_checks=None,
+                            notebook=str(TR.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
                             rack_heights={"location_master": str(TR.location_master(tmp_path))})
     return cfg, TravelNetwork(D, xw)

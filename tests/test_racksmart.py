@@ -317,7 +317,8 @@ def test_plan_policies_end_to_end(tmp_path):
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
     cfg["paths"]["out"] = str(tmp_path / "runs")
     cfg["window"] = {"start": "2026-10-05", "end": "2026-10-11"}      # the synthetic week
-    cfg["racksmart"].update(notebook=str(NOTEBOOK), planning_picks=[str(tmp_path / "p1.csv"), str(tmp_path / "p2.csv")],
+    cfg["racksmart"].update(planning_window={"start": "2026-08-21", "end": "2026-09-20"}, source_checks=None,
+                            notebook=str(NOTEBOOK), planning_picks=[str(tmp_path / "p1.csv"), str(tmp_path / "p2.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
                             rack_heights={"location_master": str(location_master(tmp_path))})
     (tmp_path / "sim.yaml").write_text(yaml.safe_dump(cfg))
@@ -339,8 +340,9 @@ def test_plan_policies_end_to_end(tmp_path):
     assert sorted(m["plans"]) == sorted(RS.METHODS)
     for key, p in m["plans"].items():
         assert p["label"] == RS.METHODS[key]["label"]
-        # heights are on for RackSmart; the comparison methods use no swap groups
-        assert any("PY/PZ" in g for g in p["known_gaps"]) == (key != "racksmart"), key
+        # heights are on for every method; the comparison methods say how they get them
+        assert not any(g.startswith("PY/PZ") for g in p["known_gaps"]), key
+        assert any(g.startswith("swap groups") for g in p["known_gaps"]) == (key != "racksmart"), key
         assert p["workbook_replay"]["feet_saved"] == 50 * 140 - 5 * 140      # every method finds the one swap here
         swaps = pd.read_csv(run_dir / f"{key}_swaps.csv")
         assert {swaps.loc[0, "location_a"], swaps.loc[0, "location_b"]} == {HOT, QUIET}
@@ -445,18 +447,22 @@ def test_heights_come_from_the_putaway_zone_prefix(tmp_path):
     assert groups[LOCS.index(QUIET)] == 4 and groups[LOCS.index(HOT)] == 2 and groups[0] == 0
 
 
-def test_racksmart_never_swaps_across_heights_but_the_comparisons_do(tmp_path, nb, net):
-    """QUIET is a tall slot, HOT a short one: RackSmart's only profitable swap is
-    now forbidden; the comparison methods use no swap groups and still make it."""
+def test_no_method_swaps_across_heights(tmp_path, nb, net):
+    """QUIET is a tall slot, HOT a short one: the only profitable swap is now
+    forbidden, for RackSmart (the notebook's own group filter) and for the
+    comparison methods (the adapter's within_groups, decision 2026-11-19)."""
     from reslot.io.locations import load_locations
     h, _ = RS.heights_from_location_master(load_locations(location_master(tmp_path, tall={QUIET})), LOCS)
     inp, train, built = RS.build_inputs(nb, LOCS, net, "D", snap_cases(), None, tours_of(PLAN), heights=h)
     assert built["faces_with_height"] == len(LOCS)
     assert RS.plan_policy(nb, inp, train).location_for(HOT, 0.0) == HOT
-    assert RS.plan_comparison(nb, inp, train)["abc_cost_test"].location_for(HOT, 0.0) == QUIET
+    for key, pol in RS.plan_comparison(nb, inp, train).items():
+        assert pol.location_for(HOT, 0.0) == HOT and pol.plan["swaps"] == 0, key
     same, _ = RS.heights_from_location_master(load_locations(location_master(tmp_path)), LOCS)
     inp, train, _ = RS.build_inputs(nb, LOCS, net, "D", snap_cases(), None, tours_of(PLAN), heights=same)
     assert RS.plan_policy(nb, inp, train).location_for(HOT, 0.0) == QUIET
+    for key, pol in RS.plan_comparison(nb, inp, train).items():           # same height: allowed again
+        assert pol.location_for(HOT, 0.0) == QUIET, key
 
 
 def test_refill_off_is_recorded_as_a_difference_from_the_tuned_run(planned, nb, net):
@@ -490,7 +496,8 @@ def test_planning_survives_a_file_with_nothing_in_the_month(tmp_path, nb, net):
     inventory().to_csv(tmp_path / "inv.csv", index=False)
     cfg = yaml.safe_load((REPO / "configs" / "sim.yaml").read_text())
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
-    cfg["racksmart"].update(notebook=str(NOTEBOOK), planning_picks=[str(tmp_path / "older.csv"), str(tmp_path / "in_month.csv")],
+    cfg["racksmart"].update(planning_window={"start": "2026-08-21", "end": "2026-09-20"}, source_checks=None,
+                            notebook=str(NOTEBOOK), planning_picks=[str(tmp_path / "older.csv"), str(tmp_path / "in_month.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
                             rack_heights={"location_master": str(location_master(tmp_path))})
     _, _, train, base, _ = prepare_planning(cfg, TravelNetwork(D, xw))

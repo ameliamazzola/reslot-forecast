@@ -160,16 +160,18 @@ _COMPARE = ("run as " + PREVIOUS_DRIVER + " ran its comparison methods: "
             "no stability setting (stable=False), no backtest guard, none of the tuned SETTINGS")
 _FIXED_N = ("swap count fixed to the detour method's count (run_month's n_ref / n_det), "
             "not chosen by the method")
-_NO_GROUPS = HEIGHT_GAP + " and no GG/HH aisle fence: the comparison methods do not use swap groups"
+_GROUPS = ("swap groups (GG/HH aisle fence + PY/PZ height, the same as RackSmart's) applied by the adapter: "
+           "every partner list is filtered to the hot face's group before the method picks from it, as the "
+           "notebook's plan() does for RackSmart; the previous run_month applied none (team decision 2026-11-19)")
 METHODS = {
     # uses_golden_zone: the method picks swap partners from Inputs.golden (Planner.quietest_golden)
     "racksmart":       {"label": "RackSmart (final)", "uses_golden_zone": False, "gaps": []},
     "classic_abc":     {"label": "Classic ABC (no cost test)", "uses_golden_zone": True,
-                        "gaps": [NOT_TUNED, _COMPARE, _FIXED_N, _NO_GROUPS, "no cost test: a swap is kept even when "
+                        "gaps": [NOT_TUNED, _COMPARE, _FIXED_N, _GROUPS, "no cost test: a swap is kept even when "
                                  "it costs more than the driving it saves"]},
-    "abc_cost_test":   {"label": "ABC with cost test", "uses_golden_zone": True, "gaps": [NOT_TUNED, _COMPARE, _NO_GROUPS]},
+    "abc_cost_test":   {"label": "ABC with cost test", "uses_golden_zone": True, "gaps": [NOT_TUNED, _COMPARE, _GROUPS]},
     "family_grouping": {"label": "Family grouping + cost test", "uses_golden_zone": False,
-                        "gaps": [NOT_TUNED, _COMPARE, _NO_GROUPS, "location families from co-picks within tours "
+                        "gaps": [NOT_TUNED, _COMPARE, _GROUPS, "location families from co-picks within tours "
                                  "(notebook's family_grouping), not the affinity clusters in sku_clusters.csv",
                                  "target slots are all faces in the plan, ranked by feet from dispatch"]},
 }
@@ -542,6 +544,7 @@ def plan_comparison(nb: Notebook, inp, train: list) -> dict:
     sizes = _sizes(train)
     Wp = nb.World(inp.D, inp.depot, inp.cases, inp.golden, inp.dollars_per_unit, inp.cost_per_case)
     pl = nb.PlannerPlus(Wp, train, part_sizes=sizes, stable=False)
+    within_groups(pl, inp.extra["groups"])
     _, n_det, _ = pl.plan("detour+cost")
     plans = {"classic_abc": pl.plan("classic_abc", n_ref=n_det),
              "abc_cost_test": pl.plan("velocity+cost"),
@@ -550,9 +553,25 @@ def plan_comparison(nb: Notebook, inp, train: list) -> dict:
     for key, (moved, n, _) in plans.items():
         info = {"method": key, "swaps": int(n), "detour_swaps_n_ref": int(n_det), "sizes": sizes,
                 "stable": False, "backtest_guard": False,
-                "cost_test": key != "classic_abc", "driver": PREVIOUS_DRIVER}
+                "cost_test": key != "classic_abc", "driver": PREVIOUS_DRIVER,
+                "swap_groups": len(set(inp.extra["groups"])), "tuned": False}
         out[key] = NotebookPlanPolicy(nb, inp, dict(moved), info, name=key)
     return out
+
+
+def within_groups(pl, groups: list) -> None:
+    """Swap groups for a notebook planner whose methods take none (Planner.plan,
+    family_grouping): wrap this planner's greedy so every partner list -- the
+    default quietest_golden or the method's own -- keeps only partners in the hot
+    face's group. The same filter plan() puts on RackSmart's partners; the
+    methods' own code is untouched."""
+    base = pl.greedy
+
+    def greedy(order, cost_test=True, n_force=None, partners=None, moved0=None):
+        own = partners or pl.quietest_golden
+        same = lambda hot, mv: [q for q in own(hot, mv) if groups[q] == groups[hot]]
+        return base(order, cost_test, n_force=n_force, partners=same, moved0=moved0)
+    pl.greedy = greedy
 
 
 def plan_method(nb: Notebook, inp, train: list, method: str) -> NotebookPlanPolicy:
@@ -619,7 +638,7 @@ def prepare_planning(cfg: dict, net):
     notebook method) and build the notebook's Inputs. Returns
     (notebook, inputs, planning tours, manifest info, input files to hash).
     Nothing from the run window is passed in."""
-    from ..io.wms_picks import load_wms_picks
+    from . import sources as S
     from .engine import window_bounds
     from .workload import build_workload
 
@@ -630,22 +649,26 @@ def prepare_planning(cfg: dict, net):
     # it so the window rule can see tours that start before it. Nothing at or after
     # the planning end is read: a tour that runs past it is cut there.
     read = (start - pd.Timedelta(days=1), end)
-    parts = {p: load_wms_picks(p, rc["planning_ts_format"], window=read) for p in rc["planning_picks"]}
-    per_file = {str(p): len(df) for p, df in parts.items()}
-    if not any(per_file.values()):
+    # The exports must agree where they overlap before their union is trusted
+    # (sources.source_check); it refuses to plan otherwise. What it reads is
+    # compared and discarded: none of it reaches the plan.
+    checks = S.source_check(rc.get("source_checks"), rc["planning_ts_format"], scope)
+    planning, file_info = S.read_picks(rc["planning_picks"], rc["planning_ts_format"], read)
+    per_file = {p: i["rows"] for p, i in file_info.items()}
+    if planning.empty:
         raise ValueError(f"no picks between {read[0].date()} and {read[1].date()} in {list(per_file)}: "
                          "check racksmart.planning_window and planning_picks")
-    planning = pd.concat([df for df in parts.values() if len(df)], ignore_index=True)
     n_raw = len(planning)
-    planning = planning.drop_duplicates("event_id").reset_index(drop=True)
+    planning = S.dedup(planning)
     plan_work = build_workload(planning, net, scope, cfg["tour"], start, end)
 
     faces = structural_faces(net, scope)
     items = face_items(planning, scope, end)
-    files = [rc["notebook"], *rc["planning_picks"]]
+    plan_files = S.entry_paths(rc["planning_picks"])
+    files = [rc["notebook"], *plan_files, *[p for p in S.check_files(rc.get("source_checks")) if p not in plan_files]]
     picks_end = str(end)
     inputs = {
-        "planning_picks": {"end": picks_end, "files": list(rc["planning_picks"])},
+        "planning_picks": {"end": picks_end, "files": plan_files},
         "faces": {"end": None, "structural": True, "rule": FACE_RULE},
         "face_items": {"end": picks_end, "rule": FACE_ITEM_RULE},
     }
@@ -704,7 +727,9 @@ def prepare_planning(cfg: dict, net):
     base = {"notebook": nb.info, "planning_window": dict(rc["planning_window"]),
             "planning_inputs": inputs,
             "planning_rows": {"read_window": [str(read[0].date()), str(read[1].date())],
-                              "read": n_raw, "per_file": per_file, "after_dedup_by_event_id": len(planning)},
+                              "read": n_raw, "per_file": per_file, "files": file_info,
+                              "after_dedup_by_event_id": len(planning), "dedup_key": S.DEDUP_KEY},
+            "source_checks": checks,
             "planning_workload": {k: plan_work.counts[k] for k in
                                   ("picks_kept", "picks_dropped", "dropped_by_reason", "tours")},
             "inputs": built, "move_cases": cases_info,

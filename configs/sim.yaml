@@ -2,13 +2,13 @@
 # Decisions: docs/decisions.md, 2026-11-02 entries.
 seed: 20261005             # recorded in the manifest; the static run draws no random numbers
 
-window:                    # inclusive days: everything after the planning month that the
-  start: "2026-09-21"      # transactions export covers (Sep 21 - Oct 15), with the plan applied
-  end: "2026-10-15"        # on Sep 21. Oct 15 may be a partial day (export runs "9.15 thru 10.15").
+window:                    # inclusive days: four full weeks Mon Oct 12 - Sun Nov 8 from the
+  start: "2026-10-12"      # Oct 10 noon - Nov 9 noon transactions export; its partial first and
+  end: "2026-11-08"        # last days are left out. Plan applied on Oct 12 (decisions 2026-11-19).
 
 operators: 6               # reference: median distinct case pickers per clock hour, Oct 5-11
                            # (p90 9, max 12); swept later. Not a finding while dispatch legs are untimed.
-                           # Set from Oct 5-11; kept for the longer window.
+                           # Measured on Oct 5-11. For this window: scripts/operators_per_hour.py.
 policy: static             # static = no re-slots; notebook methods (planned once, before the week,
                            # from the racksmart: block): racksmart | classic_abc | abc_cost_test | family_grouping
 
@@ -16,7 +16,7 @@ data:
   # Converted transactions export (scripts/xlsx_convert.py output): pick-report
   # columns plus TRANS_TYPE, read by io/wms_picks.load_wms_picks. Run on the real
   # week by the team; development and tests use synthetic data only.
-  picks_path: data/raw/transactions_0915_1015.csv
+  picks_path: "data/raw/Transactions 11-9-2026 thur 10-10.2026.csv"   # Oct 10 noon - Nov 9 noon
   ts_format: "%m/%d/%Y %I:%M:%S %p"
 
 scope:                     # v1 workload: case picks only; pallet picks (PL) are out of scope
@@ -64,13 +64,52 @@ racksmart:
   # unchanged; nothing here re-tunes them. The paths below replace the notebook's file
   # settings (CLUSTERS, RACK_HEIGHTS, CASES_PER_PALLET, REFILL_ORIGIN).
   notebook: notebooks/RackSmart_final.ipynb
-  planning_window:                     # the month before Sep 21 (inclusive days)
-    start: "2026-08-21"
-    end: "2026-09-20"
-  planning_picks:                      # 365-day pick report, both parts (deduplicated by NO)
+  planning_window:                     # the 30 days before the run start Oct 12 (inclusive days)
+    start: "2026-09-12"
+    end: "2026-10-11"
+  # Every export that covers part of the planning window: the 365-day pick reports (to
+  # Sep 21), the Sep 15 - Oct 15 transactions export and the Oct 10 noon - Nov 9 noon one.
+  # Each entry is a path, or {path, ts_format} for a file in another timestamp format.
+  # Only [planning start - 1 day, planning end) is read; rows that are one transaction
+  # seen in two exports are dropped (sources.DEDUP_KEY), which source_checks verifies.
+  planning_picks:
     - data/raw/yowmspd2__picks_past_365days_ranon9.21.26.csv
     - data/raw/yowmspd2_archive_picks_past_365days_ranon9.21.26.csv
+    - data/raw/transactions_0915_1015.csv
+    - "data/raw/Transactions 11-9-2026 thur 10-10.2026.csv"
   planning_ts_format: "%m/%d/%Y %I:%M:%S %p"
+  # Refuse to plan unless the exports agree where they overlap (src/reslot/sim/sources.py).
+  # Compared: raw case-pick legs (consecutive WZPCK/CS picks of one order x operator,
+  # both picks in the window), matched on (order, operator, leg number, both locations).
+  # Tolerance, fixed before looking at the overlaps (proposed 2026-11-19):
+  #   count_rel             leg counts differ by at most 0.1%
+  #   matched_share         at least 99.9% of each side's legs are found on the other
+  #   seconds / within_...  at least 99.9% of matched legs agree within 1 s (exports of one
+  #                         WMS table should be exact; 1 s allows seconds rounding in a
+  #                         conversion, e.g. the xlsx -> csv step)
+  #   same_event_id_share   at least 99.9% of matched legs carry the same transaction numbers
+  #                         (NO): deduplication relies on it
+  #   min_cover             the span both sides hold (first to last row) must be at least 80% of
+  #                         the configured one: catches a truncated export, while allowing the
+  #                         Sep-Oct export's possibly partial Oct 15 (>= 4.4 of 5.5 days)
+  # The deduplicated union of both sides must give the same legs as side a, same tolerance.
+  # The check reads Oct 12-15 rows of the second overlap to compare exports only; nothing it
+  # reads reaches the plan.
+  source_checks:
+    tolerance: {count_rel: 0.001, matched_share: 0.999, seconds: 1, within_seconds_share: 0.999,
+                same_event_id_share: 0.999, min_cover: 0.8}
+    overlaps:
+      - name: 365day_vs_sep_oct
+        a: [data/raw/yowmspd2__picks_past_365days_ranon9.21.26.csv,
+            data/raw/yowmspd2_archive_picks_past_365days_ranon9.21.26.csv]
+        b: [data/raw/transactions_0915_1015.csv]
+        start: "2026-09-15 00:00"      # Sep 15 - 20, inclusive days
+        end: "2026-09-21 00:00"
+      - name: sep_oct_vs_oct_nov
+        a: [data/raw/transactions_0915_1015.csv]
+        b: ["data/raw/Transactions 11-9-2026 thur 10-10.2026.csv"]
+        start: "2026-10-10 12:00"      # the newer export starts at noon
+        end: "2026-10-16 00:00"        # through Oct 15; clipped to what both files hold
   # Case counts at each face (the notebook's move cost and its tie-breaks):
   #   inventory_snapshot  the on-hand snapshot below. Taken AFTER the run start, so it is
   #                       a named lookahead exception (lookahead_exceptions.move_cases).
@@ -107,8 +146,10 @@ racksmart:
 # every manifest records which of these a run actually used.
 lookahead_exceptions:
   move_cases: >-
-    case counts per face come from the 2026-10-20 on-hand snapshot (no earlier one exists);
-    it prices moves and breaks ties, it does not choose faces. Sensitivity: move_cases: pallet_fill.
+    case counts per face come from the 2026-10-20 on-hand snapshot, 8 days after the Oct 12 run
+    start. No snapshot from before the run start exists; a newer one exists but is further from
+    the run start, so the Oct 20 one is kept. It prices moves and breaks ties, it does not choose
+    faces. Sensitivity: move_cases: pallet_fill (run_all.py --sensitivity).
 
 paths:
   out: data/processed/sim       # every sim output (replay and live); gitignored, C&D-derived

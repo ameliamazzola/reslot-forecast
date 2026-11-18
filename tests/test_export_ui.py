@@ -61,7 +61,8 @@ def two_runs(tmp_path, monkeypatch):
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
     cfg["paths"]["out"] = str(tmp_path / "runs")
     cfg["window"] = {"start": "2026-10-05", "end": "2026-10-11"}      # the synthetic week, not the repo's window
-    cfg["racksmart"].update(notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
+    cfg["racksmart"].update(planning_window={"start": "2026-08-21", "end": "2026-09-20"}, source_checks=None,
+                            notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
                             rack_heights={"location_master": str(T.location_master(tmp_path))})
     for pol in ("static", "racksmart"):
@@ -195,7 +196,8 @@ def _run_all_setup(tmp_path, outcome="adopted"):
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
     cfg["paths"]["out"] = str(tmp_path / "runs")
     cfg["window"] = {"start": "2026-10-05", "end": "2026-10-11"}
-    cfg["racksmart"].update(notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
+    cfg["racksmart"].update(planning_window={"start": "2026-08-21", "end": "2026-09-20"}, source_checks=None,
+                            notebook=str(T.NOTEBOOK), planning_picks=[str(tmp_path / "plan.csv")],
                             inventory_path=str(tmp_path / "inv.csv"), clusters_path=None,
                             rack_heights={"location_master": str(T.location_master(tmp_path))})
     (tmp_path / "sim.yaml").write_text(yaml.safe_dump(cfg))
