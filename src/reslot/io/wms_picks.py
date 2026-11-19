@@ -70,7 +70,7 @@ RENAME = {
 # (10906764CR, 10905011LR -- likely credits/returns, unconfirmed), and TYPE is
 # zero-padded. Numeric inference mangles both.
 STRING_COLS = ["TYPE", "TRANS_TYPE", "USER_NAME", "FROM_ITEM", "FROM_LOCATION", "TO_LOCATION",
-               "ORD_NO", "CUST_NAME", "FROM_ZONE", "TO_ZONE", "FROM_UOM"]
+               "ORD_NO", "CUST_NAME", "FROM_ZONE", "TO_ZONE", "FROM_UOM", "FROM_DESCR"]
 
 DEFAULT_TS_FORMAT = "%m/%d/%Y %I:%M:%S %p"
 
@@ -123,6 +123,9 @@ def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT, window=
     # snapshot-free move cost. Absent in some exports -> NaN.
     events["cases_per_pallet"] = (pd.to_numeric(df["CASES_PER_PALLET"], errors="coerce")
                                   if "CASES_PER_PALLET" in df else float("nan"))
+    # Item description, for the affinity pipeline's VMS / vitamin-brand filter. Absent -> NA.
+    events["item_descr"] = (df["FROM_DESCR"].astype("string") if "FROM_DESCR" in df
+                            else pd.Series(pd.NA, index=df.index, dtype="string"))
 
     if len(events):
         locs = events["from_loc"].apply(parse_location).apply(pd.Series)

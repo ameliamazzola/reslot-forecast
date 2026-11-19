@@ -160,5 +160,48 @@ lookahead_exceptions:
     the run start, so the Oct 20 one is kept. It prices moves and breaks ties, it does not choose
     faces. Sensitivity: move_cases: pallet_fill (run_all.py --sensitivity).
 
+generator:
+  # Live mode's order source: the team's OrderGenerator (src/reslot/orders.py) behind
+  # GeneratorSource (src/reslot/sim/orders.py). Never citable (mode: live).
+  #   empirical  (live default) lines per order and cases per line drawn from the profile's
+  #              planning-window histograms; arrivals every minute at orders_per_day x 7 x
+  #              weekday share x hour share / 60 (src/reslot/sim/generator.py)
+  #   default    "team generator as written (06:00 + 960 min shift)": OrderGenerator with the
+  #              `default` parameters below, orders only during each day's shift
+  mode: empirical
+  profile_path: data/processed/generator/profile_20260912_20261011/profile.json   # fit_generator_profile.py
+  seed: 20261119
+  orders_per_day: null              # null = the profile's (planning-window orders per day)
+  affinity: 0.5                     # the generator's same-cluster draw probability; live control
+  sku_to_face: synthetic            # synthetic = seeded random layout on the usable faces
+                                    # real = last item picked at each face before the run start
+  layout_seed: 20261119             # synthetic layout only
+  default:                          # OrderGenerator's own defaults, used in mode: default
+    shift_start_hour: 6
+    shift_minutes: 960
+    lines_per_order_mean: 6.0
+    min_lines: 3
+    max_lines: 25
+    cases_per_line_mean: 2.0
+  exclude:                          # left out of the profile, its clusters, and the real side of
+    vms_zone: WZVMS                 # compare_generator.py: the affinity pipeline's filter
+    vms_keep_pattern: ARRID         # (src/affinity/build_matrix.py steps 1 and 1b) -- SKUs picked
+    vitamin_pattern: "VITFUS|CRITTER"   # in WZVMS unless ARRID; discontinued vitamin brands anywhere
+  clusters:                         # fitted on the planning window by fit_generator_profile.py;
+    min_support: 0.005              # the affinity pipeline's settings (decisions, Oct 2026)
+    min_jaccard: 0.10
+    resolution: 1.0
+    seed: 42
+  compare:                          # scripts/compare_generator.py
+    bins: {orders_per_hour: 5, lines_cap: 30, cases_cap: 50}
+    thresholds:                     # max TVD to pass, set 2026-11-19 before any run
+      orders_per_hour: 0.15
+      orders_per_hour_weekday: 0.15
+      orders_per_hour_weekend: 0.15
+      lines_per_order: 0.10
+      cases_per_line: 0.10
+      share_1_2_line_orders: 0.05
+      sku_concentration: 0.10
+
 paths:
   out: data/processed/sim       # every sim output (replay and live); gitignored, C&D-derived
