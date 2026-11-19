@@ -171,10 +171,57 @@ def test_empirical_arrivals_follow_the_hour_and_day_shares(net, profile):
     days = [0.0] * 7
     days[0] = 1.0                                                       # Mondays only
     src = source(net, {**profile, "hour_of_day_share": hours, "day_of_week_share": days},
-                 days=7, mode="empirical", orders_per_day=100)
+                 days=7, mode="empirical", orders_per_day=100, hour_profile="single")
     ts = [RUN_START + pd.Timedelta(seconds=t.arrival_s) for t in src.orders()]
     assert {t.hour for t in ts} == {10} and {t.dayofweek for t in ts} == {0}
     assert 600 < len(ts) < 800                                          # ~ 100 x 7 in that one hour
+
+
+def test_split_hour_profile_uses_weekday_hours_on_weekdays_and_weekend_hours_on_weekends(net, profile):
+    wd, we = [0.0] * 24, [0.0] * 24
+    wd[9], we[20] = 1.0, 1.0
+    prof = {**profile, "hour_of_day_share_weekday": wd, "hour_of_day_share_weekend": we}
+    src = source(net, prof, days=14, mode="empirical", orders_per_day=50)
+    ts = [RUN_START + pd.Timedelta(seconds=t.arrival_s) for t in src.orders()]
+    assert {t.hour for t in ts if t.dayofweek < 5} == {9} and {t.hour for t in ts if t.dayofweek >= 5} == {20}
+    assert src.layout["hour_profile"] == "split" and "weekday / weekend" in src.label
+    # the first version stays available: one profile for every day
+    single = source(net, prof, days=14, mode="empirical", orders_per_day=50, hour_profile="single")
+    assert single.layout["hour_profile"] == "single" and drawn(single) != drawn(source(net, prof, days=14,
+                                                                                         mode="empirical", orders_per_day=50))
+    old = {k: v for k, v in profile.items() if not k.startswith("hour_of_day_share_")}
+    with pytest.raises(ValueError, match="rerun fit_generator_profile"):
+        source(net, old, mode="empirical")
+    assert drawn(source(net, old, mode="empirical", hour_profile="single"))
+    with pytest.raises(ValueError, match="hour_profile"):
+        source(net, profile, mode="empirical", hour_profile="both")
+
+
+def test_profile_fits_weekday_and_weekend_hours_from_their_own_orders(tmp_path):
+    rows = pick_rows(start=PLAN_START, days=30, n_orders=600)
+    ts = pd.to_datetime(rows["CREATE_DT"], format=FMT)
+    # weekend orders all at 21:00, weekday orders keep their random times
+    first = rows.groupby("ORD_NO")["CREATE_DT"].transform("first")
+    wkend = pd.to_datetime(first, format=FMT).dt.dayofweek >= 5
+    rows.loc[wkend, "CREATE_DT"] = ts[wkend].dt.normalize().add(pd.Timedelta(hours=21)).dt.strftime(FMT)
+    rows.to_csv(tmp_path / "p.csv", index=False)
+    prof = G.fit_profile(load_wms_picks(tmp_path / "p.csv", FMT), SCOPE, PLAN_START, PLAN_END, CLUSTER_CFG)
+    assert prof["hour_of_day_share_weekend"][21] == pytest.approx(1.0)
+    assert prof["hour_of_day_share_weekday"][21] < 0.2 and prof["orders_weekday"] + prof["orders_weekend"] == 600
+    assert sum(prof["hour_of_day_share_weekday"]) == pytest.approx(1)
+
+
+def test_noise_floor_is_the_generator_against_itself(net, profile):
+    g = gcfg(mode="empirical")
+    end = RUN_START + pd.Timedelta(days=3)
+    nf = G.noise_floor(g, SCOPE, net, profile, RUN_START, end, pairs=2, seed_base=100)
+    assert nf["seed_pairs"] == [[101, 102], [103, 104]]
+    assert set(nf["scores"]) == {"orders_per_hour", "orders_per_hour_weekday", "orders_per_hour_weekend",
+                                 "lines_per_order", "cases_per_line", "share_1_2_line_orders", "sku_concentration"}
+    for v in nf["scores"].values():
+        assert len(v["values"]) == 2 and 0 <= v["mean"] <= v["max"] <= 1
+    assert nf["scores"]["lines_per_order"]["max"] > 0                      # different seeds, different draws
+    assert G.noise_floor(g, SCOPE, net, profile, RUN_START, end, pairs=2, seed_base=100) == nf
 
 
 def test_the_engine_runs_generated_orders(net, profile):
@@ -253,7 +300,7 @@ def test_fit_and_compare_scripts_end_to_end(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sys, "argv", ["compare_generator.py", str(tmp_path / "sim.yaml")])
     runpy.run_path(str(TR.REPO / "scripts" / "compare_generator.py"), run_name="__main__")
-    d = tmp_path / "out" / "generator_compare_empirical_20261012_20261108"
+    d = tmp_path / "out" / "generator_compare_empirical_split_20261012_20261108"
     res = json.loads((d / "comparison.json").read_text())
     th = cfg["generator"]["compare"]["thresholds"]
     assert set(res["scores"]) == set(th) == {"orders_per_hour", "orders_per_hour_weekday", "orders_per_hour_weekend",
@@ -261,9 +308,12 @@ def test_fit_and_compare_scripts_end_to_end(tmp_path, monkeypatch):
                                              "sku_concentration"}
     assert res["real"]["orders"] == 800
     assert all(v["threshold"] == th[k] and isinstance(v["pass"], bool) for k, v in res["scores"].items())
+    nf = cfg["generator"]["compare"]["noise_floor"]
+    assert len(res["noise_floor"]["seed_pairs"]) == nf["seed_pairs"] == 5
+    assert all(0 <= v["noise_floor_mean"] <= v["noise_floor_max"] for v in res["scores"].values())
     assert res["scores"]["lines_per_order"]["tvd"] < 0.1               # same process both sides here
     m = json.loads((d / "manifest.json").read_text())
-    assert m["mode"] == "generator_compare" and m["generator_mode"] == "empirical"
+    assert m["mode"] == "generator_compare" and m["generator_mode"] == "empirical" and m["hour_profile"] == "split"
     assert m["generator_mode_label"].startswith("empirical")
 
 
@@ -318,7 +368,8 @@ def test_modes_are_labelled(net, profile):
 
 def test_repo_config_runs_live_empirical_with_thresholds_set():
     g = yaml.safe_load((TR.REPO / "configs" / "sim.yaml").read_text())["generator"]
-    assert g["mode"] == "empirical" and g["exclude"] == EXCLUDE
+    assert g["mode"] == "empirical" and g["exclude"] == EXCLUDE and g["hour_profile"] == "split"
+    assert g["compare"]["noise_floor"] == {"seed_pairs": 5, "seed_base": 1000}
     assert g["compare"]["thresholds"] == {"orders_per_hour": 0.15, "orders_per_hour_weekday": 0.15,
                                           "orders_per_hour_weekend": 0.15, "lines_per_order": 0.10,
                                           "cases_per_line": 0.10, "share_1_2_line_orders": 0.05,

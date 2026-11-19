@@ -170,7 +170,8 @@ class GeneratorSource:
     Minutes walked: mode 'default' -- the team generator as written, each day's shift
     (shift_start_hour, generator.shift_minutes long), multiplier 1; mode
     'empirical' -- every minute, multiplier from the hour-of-day and day-of-week
-    shares (generator.minute_multiplier).
+    shares (generator.minute_multiplier); hour_share is one 24-list or
+    {"weekday": [...], "weekend": [...]}.
 
     Orders are generated lazily, one minute at a time, as the engine pulls them,
     so a control change (set_affinity / set_speed) applies to every order
@@ -181,7 +182,7 @@ class GeneratorSource:
     citable = False
 
     def __init__(self, generator, sku_face: dict, start: pd.Timestamp, days: int, mode: str = "default",
-                 hour_share: list | None = None, day_share: list | None = None, shift_start_hour: int = 6,
+                 hour_share: list | dict | None = None, day_share: list | None = None, shift_start_hour: int = 6,
                  layout: dict | None = None, inputs: list | None = None, keep_orders: bool = True,
                  label: str | None = None):
         if mode not in ("default", "empirical"):

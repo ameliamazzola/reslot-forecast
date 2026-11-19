@@ -34,7 +34,13 @@ Profile (fit_profile), from the planning window only, after the exclusion:
 Empirical mode (EmpiricalOrderGenerator, a subclass; OrderGenerator's default
 behaviour is untouched): lines per order and cases per line are drawn from the
 profile's histograms, and the arrival rate in each minute is
-    orders_per_day x 7 x day_share[weekday] x hour_share[hour] / 60.
+    orders_per_day x 7 x day_share[weekday] x hour_share[hour] / 60,
+with hour_share (generator.hour_profile):
+    split   weekday hours (Mon-Fri orders) or weekend hours (Sat-Sun orders),
+            whichever the minute falls on -- the fix agreed for the weekend score
+    single  one hour-of-day profile over all days (the first version, kept so the
+            before/after is reproducible)
+Both are fitted on the planning window only.
 """
 
 from __future__ import annotations
@@ -51,13 +57,15 @@ from ..orders import Order as GenOrder
 SCHEMA = "racksmart-generator-profile/1"
 MODE_LABELS = {
     "default": "team generator as written ({h:02d}:00 + {m} min shift)",
-    "empirical": "empirical: planning-window line, case, hour-of-day and day-of-week profile",
+    "empirical": "empirical: planning-window line, case, day-of-week and {hours} hour-of-day profile",
 }
+HOUR_PROFILES = {"split": "weekday / weekend", "single": "single"}
 
 
-def mode_label(mode: str, default_cfg: dict | None = None) -> str:
+def mode_label(mode: str, default_cfg: dict | None = None, hour_profile: str = "split") -> str:
     d = default_cfg or {}
-    return MODE_LABELS[mode].format(h=int(d.get("shift_start_hour", 6)), m=int(d.get("shift_minutes", 960)))
+    return MODE_LABELS[mode].format(h=int(d.get("shift_start_hour", 6)), m=int(d.get("shift_minutes", 960)),
+                                    hours=HOUR_PROFILES[hour_profile])
 DEFINITIONS = {
     "order": "ORD_NO with >= 1 in-scope case pick in the window; released at its first in-scope pick (proxy)",
     "line": "distinct SKU on an order",
@@ -135,6 +143,10 @@ def order_stats(lines: pd.DataFrame, start, end) -> dict:
             "cases_per_line_hist": _hist(lines["cases"]),
             "share_1_2_line_orders": float((orders["n_lines"] <= 2).mean()) if len(orders) else 0.0,
             "hour_of_day_share": _shares(orders["released"].dt.hour, 24),
+            "hour_of_day_share_weekday": _shares(orders.loc[orders["released"].dt.dayofweek < 5, "released"].dt.hour, 24),
+            "hour_of_day_share_weekend": _shares(orders.loc[orders["released"].dt.dayofweek >= 5, "released"].dt.hour, 24),
+            "orders_weekday": int((orders["released"].dt.dayofweek < 5).sum()),
+            "orders_weekend": int((orders["released"].dt.dayofweek >= 5).sum()),
             "day_of_week_share": _shares(orders["released"].dt.dayofweek, 7),
             "sku_lines": {str(k): int(v) for k, v in sku_lines.items()}}
 
@@ -191,6 +203,9 @@ def fit_profile(events: pd.DataFrame, scope: dict, start, end, cluster_cfg: dict
             "orders_per_day": st["orders_per_day"],
             "lines_per_order_hist": st["lines_per_order_hist"], "cases_per_line_hist": st["cases_per_line_hist"],
             "hour_of_day_share": st["hour_of_day_share"], "day_of_week_share": st["day_of_week_share"],
+            "hour_of_day_share_weekday": st["hour_of_day_share_weekday"],
+            "hour_of_day_share_weekend": st["hour_of_day_share_weekend"],
+            "orders_weekday": st["orders_weekday"], "orders_weekend": st["orders_weekend"],
             "sku_rates": {s: n / st["days"] for s, n in st["sku_lines"].items()},
             "clusters": clusters, "cluster_settings": dict(cluster_cfg),
             "n_clusters": len(set(clusters.values())), "skus_with_cluster": len(clusters),
@@ -250,9 +265,12 @@ class EmpiricalOrderGenerator(OrderGenerator):
         return GenOrder(o.order_id, minute, list(zip(o.skus, [int(c) for c in cases])))
 
 
-def minute_multiplier(gen: OrderGenerator, ts: pd.Timestamp, hour_share: list, day_share: list) -> float:
+def minute_multiplier(gen: OrderGenerator, ts: pd.Timestamp, hour_share, day_share: list) -> float:
     """Multiplier for OrderGenerator.arrivals so that the minute's expected orders are
-    orders_per_day x 7 x day_share x hour_share / 60."""
+    orders_per_day x 7 x day_share x hour_share / 60. hour_share: one 24-list, or
+    {"weekday": [...], "weekend": [...]} chosen by the minute's day."""
+    if isinstance(hour_share, dict):
+        hour_share = hour_share["weekend" if ts.dayofweek >= 5 else "weekday"]
     per_minute = gen.orders_per_day * 7 * day_share[ts.dayofweek] * hour_share[ts.hour] / 60
     return per_minute / (gen.orders_per_day / gen.shift_minutes)
 
@@ -394,11 +412,48 @@ def make_generator_source(gcfg: dict, scope: dict, net, profile: dict, start, da
         shift_start = 0
     else:
         raise ValueError(f"generator.mode must be 'default' or 'empirical', got {mode!r}")
+    hour_profile = gcfg.get("hour_profile", "split")
+    if hour_profile == "split":
+        if "hour_of_day_share_weekday" not in profile:
+            raise ValueError("hour_profile: split needs weekday / weekend hour shares in the profile; "
+                             "rerun fit_generator_profile.py (or set hour_profile: single)")
+        hour_share = {"weekday": profile["hour_of_day_share_weekday"], "weekend": profile["hour_of_day_share_weekend"]}
+    elif hour_profile == "single":
+        hour_share = profile["hour_of_day_share"]
+    else:
+        raise ValueError(f"generator.hour_profile must be 'split' or 'single', got {hour_profile!r}")
     info = {"sku_to_face": how, "layout_seed": gcfg.get("layout_seed") if how == "synthetic" else None,
+            "hour_profile": hour_profile if mode == "empirical" else None,
             "skus_in_profile": int(len(rates)), "skus_with_face": len(mapped),
             "share_of_profile_lines_with_face": float(rates[mapped].sum() / rates.sum()),
             "usable_faces": len(faces), "orders_per_day": opd, "seed": int(gcfg["seed"])}
     return GeneratorSource(gen, {s: sku_face[s] for s in mapped}, pd.Timestamp(start), days, mode,
-                           hour_share=profile["hour_of_day_share"], day_share=profile["day_of_week_share"],
+                           hour_share=hour_share, day_share=profile["day_of_week_share"],
                            shift_start_hour=shift_start, layout=info,
-                           label=mode_label(mode, gcfg.get("default")))
+                           label=mode_label(mode, gcfg.get("default"), hour_profile))
+
+
+def noise_floor(gcfg: dict, scope: dict, net, profile: dict, start, end, pairs: int, seed_base: int) -> dict:
+    """The generator against itself: `pairs` pairs of generator seeds (seed_base + 1,
+    + 2), (+ 3, + 4), ... over the same window and config, scored with the same
+    statistics as generated vs real. The TVD two draws of one process show by chance:
+    a threshold at or below it can't be met by any generator."""
+    start, end = pd.Timestamp(start), pd.Timestamp(end)
+    days = (end - start).days
+
+    def stats(seed):
+        src = make_generator_source({**gcfg, "seed": seed}, scope, net, profile, start, days)
+        for _ in src.orders():
+            pass
+        return order_stats(generator_lines(src), start, end)
+
+    runs, seeds = [], []
+    for i in range(int(pairs)):
+        a, b = seed_base + 2 * i + 1, seed_base + 2 * i + 2
+        seeds.append([a, b])
+        runs.append(compare_stats(stats(a), stats(b), {"bins": (gcfg.get("compare") or {}).get("bins")}))
+    out = {}
+    for k in runs[0]:
+        v = [r[k]["tvd"] for r in runs]
+        out[k] = {"mean": float(np.mean(v)), "max": float(np.max(v)), "values": v}
+    return {"seed_pairs": seeds, "scores": out}

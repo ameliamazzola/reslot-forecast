@@ -169,6 +169,8 @@ generator:
   #   default    "team generator as written (06:00 + 960 min shift)": OrderGenerator with the
   #              `default` parameters below, orders only during each day's shift
   mode: empirical
+  hour_profile: split               # empirical: split = weekday and weekend hour-of-day shares (agreed fix
+                                    # for the weekend score, 2026-11-19); single = one profile (first version)
   profile_path: data/processed/generator/profile_20260912_20261011/profile.json   # fit_generator_profile.py
   seed: 20261119
   orders_per_day: null              # null = the profile's (planning-window orders per day)
@@ -194,6 +196,7 @@ generator:
     seed: 42
   compare:                          # scripts/compare_generator.py
     bins: {orders_per_hour: 5, lines_cap: 30, cases_cap: 50}
+    noise_floor: {seed_pairs: 5, seed_base: 1000}   # generator vs itself, reported beside each threshold
     thresholds:                     # max TVD to pass, set 2026-11-19 before any run
       orders_per_hour: 0.15
       orders_per_hour_weekday: 0.15
