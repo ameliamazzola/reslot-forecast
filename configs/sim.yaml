@@ -206,5 +206,12 @@ generator:
       share_1_2_line_orders: 0.05
       sku_concentration: 0.10
 
+live:                               # scripts/run_live.py; never citable (mode: live)
+  host: 127.0.0.1                   # the only host accepted
+  port: 8765
+  speed: 60                         # sim seconds per wall second at the start
+  speeds: [1, 10, 60, 600]          # the speeds POST /control accepts
+  max_events_per_second: 4          # wall clock, whatever the speed
+
 paths:
   out: data/processed/sim       # every sim output (replay and live); gitignored, C&D-derived

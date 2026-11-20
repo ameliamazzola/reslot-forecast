@@ -108,7 +108,8 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
     env:      the SimPy environment -- a plain Environment for replay (default),
               a RealtimeEnvironment for live.
     observer: optional callback(event, payload) for streaming ('release', 'start',
-              'leg', 'done'); it sees results only, never future orders.
+              'first' (the tour's first pick and its stop), 'leg', 'done'); it sees
+              results only, never future orders.
     """
     from .orders import ArrivedOrders
 
@@ -144,6 +145,7 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
                 raise ValueError(f"policy {policy.name!r} route is not a permutation of tour {t.tour_id}")
             j0 = order[0]
             first = place(t.picks[j0].location)
+            emit("first", {"tour_id": t.tour_id, "t": env.now, "stop": stop_of[first]})
             prev_j, prev_loc, prev_stop = j0, first, stop_of[first]
             dispatch_feet = net.feet(start_stop, prev_stop)
             pick_feet = 0.0
