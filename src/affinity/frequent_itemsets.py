@@ -56,6 +56,18 @@ print(cust.reindex(both).value_counts().head(10))
 
 # %%
 pairs.to_pickle(PROCESSED_DIR / "frequent_pairs.pkl")
+
+# Carry build_matrix's data cutoff forward, tied to the basket these pairs came from.
+import sys
+sys.path.insert(0, str(PROJECT_ROOT / "src" / "affinity"))
+from graph_export import file_sha16, read_meta, write_meta
+basket_meta = read_meta(PROCESSED_DIR / "affinity_meta.json")
+if basket_meta["basket"]["sha256_16"] != file_sha16(PROCESSED_DIR / "basket_matrix.pkl"):
+    raise SystemExit("basket_matrix.pkl does not match affinity_meta.json: rerun build_matrix.py")
+write_meta(PROCESSED_DIR / "frequent_pairs_meta.json", basket_meta["cutoff_exclusive"],
+           made_by="src/affinity/frequent_itemsets.py", min_support=MIN_SUPPORT, max_len=MAX_LEN,
+           basket_sha256_16=basket_meta["basket"]["sha256_16"],
+           frequent_pairs_sha256_16=file_sha16(PROCESSED_DIR / "frequent_pairs.pkl"))
 top_pairs[["support", "orders", "descriptions"]].to_csv(PROCESSED_DIR / "top_pairs.csv", index=False)
 
 print("saved", len(pairs), "itemsets")

@@ -1,0 +1,7 @@
+{
+ "lookback": 1,
+ "K": 30,
+ "margin": 2.0,
+ "refill": true,
+ "cluster": 3.0
+}

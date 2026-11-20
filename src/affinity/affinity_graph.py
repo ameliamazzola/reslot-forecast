@@ -7,6 +7,21 @@ PROJECT_ROOT = Path(r"C:\Users\ameli\projects\reslot-forecast")
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 
+import sys
+sys.path.insert(0, str(PROJECT_ROOT / "src" / "affinity"))
+from graph_export import file_sha16, read_meta, write_meta
+
+# The data cutoff comes from build_matrix.py (affinity_meta.json), checked through
+# frequent_itemsets.py; every pick read below is cut at the same day.
+basket_meta = read_meta(PROCESSED_DIR / "affinity_meta.json")
+pairs_meta = read_meta(PROCESSED_DIR / "frequent_pairs_meta.json")
+if (pairs_meta["basket_sha256_16"] != basket_meta["basket"]["sha256_16"]
+        or basket_meta["basket"]["sha256_16"] != file_sha16(PROCESSED_DIR / "basket_matrix.pkl")
+        or pairs_meta["frequent_pairs_sha256_16"] != file_sha16(PROCESSED_DIR / "frequent_pairs.pkl")):
+    raise SystemExit("basket / frequent pairs / their meta files disagree: rerun build_matrix.py, then frequent_itemsets.py")
+CUTOFF = pd.Timestamp(basket_meta["cutoff_exclusive"])
+print("cutoff (exclusive):", CUTOFF.date())
+
 pairs = pd.read_pickle(PROCESSED_DIR / "frequent_pairs.pkl")
 N_ORDERS = len(pd.read_pickle(PROCESSED_DIR / "basket_matrix.pkl"))
 
@@ -91,11 +106,20 @@ for i in range(len(clusters)):
     print(cluster_table[cluster_table["cluster"] == i].head(8)[["orders", "descr"]].to_string(index=False))
 
 cluster_table.to_csv(PROCESSED_DIR / "sku_clusters.csv", index=False)
+# Read by the simulator (reslot.sim.racksmart.cluster_cutoff): it refuses clusters
+# with no meta, a meta for another file, or a cutoff after the run start.
+write_meta(PROCESSED_DIR / "sku_clusters_meta.json", CUTOFF.date(),
+           made_by="src/affinity/affinity_graph.py", min_jaccard=MIN_JACCARD, resolution=1.0, seed=42,
+           clusters=len(clusters), skus=len(cluster_table),
+           sku_clusters_sha256_16=file_sha16(PROCESSED_DIR / "sku_clusters.csv"),
+           basket=basket_meta["basket"], frequent_pairs=pairs_meta)
 
 # %%
 picks_dt = pd.concat([pd.read_csv(RAW_DIR / f, usecols=["ORD_NO", "FROM_ITEM", "CREATE_DT"],
                                   dtype={"ORD_NO": str, "FROM_ITEM": str}) for f in files])
-picks_dt["month"] = pd.to_datetime(picks_dt["CREATE_DT"], format="%m/%d/%Y %I:%M:%S %p").dt.to_period("M")
+picks_dt["CREATE_DT"] = pd.to_datetime(picks_dt["CREATE_DT"], format="%m/%d/%Y %I:%M:%S %p")
+picks_dt = picks_dt[picks_dt["CREATE_DT"] < CUTOFF]
+picks_dt["month"] = picks_dt["CREATE_DT"].dt.to_period("M")
 
 clusters_saved = pd.read_csv(PROCESSED_DIR / "sku_clusters.csv", dtype={"sku": str})
 cluster_skus = clusters_saved.loc[clusters_saved["cluster"] == 1, "sku"]
@@ -145,8 +169,9 @@ summary.to_csv(PROCESSED_DIR / "cluster_summary.csv")
 labels["pick_lines"] = labels["sku"].map(lines_per_sku).fillna(0)
 print(labels.groupby("group")["pick_lines"].sum() / labels["pick_lines"].sum())
 # %%
-picks_uom = pd.concat([pd.read_csv(RAW_DIR / f, usecols=["FROM_ITEM", "FROM_UOM"],
+picks_uom = pd.concat([pd.read_csv(RAW_DIR / f, usecols=["FROM_ITEM", "FROM_UOM", "CREATE_DT"],
                                    dtype={"FROM_ITEM": str}) for f in files])
+picks_uom = picks_uom[pd.to_datetime(picks_uom["CREATE_DT"], format="%m/%d/%Y %I:%M:%S %p") < CUTOFF]
 
 sku_to_cluster = dict(zip(cluster_table["sku"], cluster_table["cluster"]))
 uom_mix = (picks_uom.assign(cluster=picks_uom["FROM_ITEM"].map(sku_to_cluster))
@@ -195,3 +220,11 @@ plt.axis("off")
 plt.savefig(PROCESSED_DIR / "affinity_graph.png", dpi=200, bbox_inches="tight")
 plt.show()
 
+# %%
+# Same graph as data for the simulator UI (ui/index.html): H, clusters, pos and
+# summary exactly as computed above. See src/affinity/graph_export.py.
+from graph_export import write_graph_json
+
+out = write_graph_json(PROCESSED_DIR / "affinity_graph.json", H, clusters, pos, summary,
+                       min_jaccard=MIN_JACCARD, resolution=1.0, seed=42, cutoff=str(CUTOFF.date()))
+print("wrote", out)
