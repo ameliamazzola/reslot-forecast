@@ -367,14 +367,17 @@ def generator_lines(source) -> pd.DataFrame:
     return df
 
 
-def make_generator_source(gcfg: dict, scope: dict, net, profile: dict, start, days: int):
+def make_generator_source(gcfg: dict, scope: dict, net, profile: dict, start, days: int,
+                          dispatch_stop: str | None = None):
     """Build GeneratorSource from config `generator` and a fitted profile.
 
     sku_to_face: 'synthetic' -- seeded random layout on the usable faces (FACE_RULE);
                  'real' -- the last item picked at each face before the run start
                  (profile face_items, from the planning picks).
     SKUs with no face are left out of the demand profile; their share of the
-    profile's lines is recorded."""
+    profile's lines is recorded. generator.routing puts each tour's picks in
+    visit order (src/reslot/sim/routing.py); any rule but 'draw' needs the
+    dispatch stop."""
     from .orders import GeneratorSource
     from .racksmart import structural_faces
 
@@ -422,7 +425,22 @@ def make_generator_source(gcfg: dict, scope: dict, net, profile: dict, start, da
         hour_share = profile["hour_of_day_share"]
     else:
         raise ValueError(f"generator.hour_profile must be 'split' or 'single', got {hour_profile!r}")
+    from .routing import Router, resolve_rule, work_path_series
+    rule, routing_info = resolve_rule(gcfg.get("routing"), start)
+    router = None
+    if rule != "draw":
+        if dispatch_stop is None:
+            raise ValueError(f"routing rule {rule!r} needs the dispatch stop")
+        wp = None
+        if rule == "work_path":
+            master = (gcfg.get("routing") or {}).get("location_master")
+            if not master:
+                raise ValueError("routing rule work_path needs generator.routing.location_master")
+            wp = work_path_series(master)
+            routing_info["location_master"] = str(master)
+        router = Router(net, scope, dispatch_stop, wp)
     info = {"sku_to_face": how, "layout_seed": gcfg.get("layout_seed") if how == "synthetic" else None,
+            "routing": routing_info,
             "hour_profile": hour_profile if mode == "empirical" else None,
             "skus_in_profile": int(len(rates)), "skus_with_face": len(mapped),
             "share_of_profile_lines_with_face": float(rates[mapped].sum() / rates.sum()),
@@ -430,7 +448,8 @@ def make_generator_source(gcfg: dict, scope: dict, net, profile: dict, start, da
     return GeneratorSource(gen, {s: sku_face[s] for s in mapped}, pd.Timestamp(start), days, mode,
                            hour_share=hour_share, day_share=profile["day_of_week_share"],
                            shift_start_hour=shift_start, layout=info,
-                           label=mode_label(mode, gcfg.get("default"), hour_profile))
+                           label=mode_label(mode, gcfg.get("default"), hour_profile),
+                           router=router, routing_rule=rule)
 
 
 def noise_floor(gcfg: dict, scope: dict, net, profile: dict, start, end, pairs: int, seed_base: int) -> dict:
@@ -442,7 +461,8 @@ def noise_floor(gcfg: dict, scope: dict, net, profile: dict, start, end, pairs: 
     days = (end - start).days
 
     def stats(seed):
-        src = make_generator_source({**gcfg, "seed": seed}, scope, net, profile, start, days)
+        src = make_generator_source({**gcfg, "seed": seed, "routing": {"rule": "draw"}}, scope, net, profile,
+                                    start, days)
         for _ in src.orders():
             pass
         return order_stats(generator_lines(src), start, end)

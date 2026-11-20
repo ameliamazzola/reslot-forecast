@@ -178,6 +178,13 @@ generator:
   sku_to_face: synthetic            # synthetic = seeded random layout on the usable faces
                                     # real = last item picked at each face before the run start
   layout_seed: 20261119             # synthetic layout only
+  routing:                          # visit order of each generated tour (src/reslot/sim/routing.py),
+    rule: calibrated                # set once in the source, the same under every policy.
+                                    # calibrated = the rule calibrate_routing.py found closest to real
+                                    # tours' scan order (planning window); or draw | work_path |
+                                    # aisle_serpentine | nearest_neighbour
+    calibration_path: data/processed/generator/routing_calibration/routing_calibration.json
+    location_master: data/raw/yowmspd2_locations_9.14.26.csv   # WORK_PATH for the work_path rule
   default:                          # OrderGenerator's own defaults, used in mode: default
     shift_start_hour: 6
     shift_minutes: 960

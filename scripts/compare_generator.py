@@ -61,6 +61,9 @@ if not profile_path.exists():
 profile = json.loads(profile_path.read_text(encoding="utf-8"))
 net = load_travel(cfg["travel"]["dir"])
 
+# The statistics are order-level (counts, lines, cases, SKUs, release times): visit
+# order doesn't enter, so the comparison draws without a routing step.
+gcfg["routing"] = {"rule": "draw"}
 src = G.make_generator_source(gcfg, cfg["scope"], net, profile, start, days)
 n_tours = sum(1 for _ in src.orders())
 gen = G.order_stats(G.generator_lines(src), start, end)

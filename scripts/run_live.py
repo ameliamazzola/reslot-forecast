@@ -2,9 +2,13 @@
 
 Run:  python scripts/run_live.py [configs/sim.yaml] [--policy static|racksmart|abc_cost_test|family_grouping]
                                  [--seed N] [--speed 1|10|60|600] [--port 8765] [--hours H]
+                                 [--sku-to-face real|synthetic]
 
   source   GeneratorSource (config generator; empirical mode by default), profile
            from generator.profile_path, seed from config or --seed. Case picks only.
+           Layout --sku-to-face (default real: the last item picked at each face
+           before the run start). Each tour's picks in visit order by
+           generator.routing (calibrated: scripts/calibrate_routing.py).
   policy   static, or a notebook method planned from the planning month exactly as
            replay plans it (racksmart.load_racksmart), with the no-lookahead check
            against the run start (engine.check_planning_inputs).
@@ -50,12 +54,15 @@ ap.add_argument("--speed", type=float, help="initial speed (one of live.speeds);
 ap.add_argument("--host", default=None, help=f"must be {L.LOCAL_HOST}")
 ap.add_argument("--port", type=int, help="default live.port; 0 = any free port")
 ap.add_argument("--hours", type=float, help="sim hours to run (default: the whole window)")
+ap.add_argument("--sku-to-face", choices=["synthetic", "real"], default="real",
+                help="SKU -> face layout: real = last item picked at each face before the run start (default)")
 args = ap.parse_args()
 
 cfg = load_config(args.config)
 lc, gcfg = cfg["live"], dict(cfg["generator"])
 if args.seed is not None:
     gcfg["seed"] = args.seed
+gcfg["sku_to_face"] = args.sku_to_face
 host = args.host or lc["host"]
 if host != L.LOCAL_HOST:
     raise SystemExit(f"not running: live mode binds to {L.LOCAL_HOST} only, not {host!r}")
@@ -72,7 +79,11 @@ profile_path = Path(gcfg["profile_path"])
 if not profile_path.exists():
     raise SystemExit(f"{profile_path} not found: run scripts/fit_generator_profile.py first")
 profile = json.loads(profile_path.read_text(encoding="utf-8"))
-source = G.make_generator_source(gcfg, cfg["scope"], net, profile, start, days)
+try:
+    source = G.make_generator_source(gcfg, cfg["scope"], net, profile, start, days,
+                                     dispatch_stop=cfg["trip_ends"]["start_stop"])
+except ValueError as exc:
+    raise SystemExit(f"not running: {exc}")
 
 rs_info, rs_files, move_cost = None, [], None
 if args.policy == "static":
@@ -96,7 +107,8 @@ except ValueError as exc:
     raise SystemExit(f"not running: {exc}")
 server = L.serve(run, host, args.port if args.port is not None else lc["port"], REPO / "ui")
 port = server.server_address[1]
-print(f"live: {source.label}, policy {policy.name}, seed {gcfg['seed']}, speed {speed:g}x, "
+print(f"live: {source.label}, layout {gcfg['sku_to_face']}, routing {source.routing_rule}, "
+      f"policy {policy.name}, seed {gcfg['seed']}, speed {speed:g}x, "
       f"from {start} for {until_s / 3600:g} sim hours")
 print(f"serving http://{L.LOCAL_HOST}:{port}/  (events /events, state /state, control POST /control); Ctrl+C to stop",
       flush=True)

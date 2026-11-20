@@ -163,9 +163,12 @@ class GeneratorSource:
     orders. Never citable (manifest mode: live).
 
     Each generated Order (minute, [(sku, cases)]) becomes one Tour: arrival_s =
-    released_at = minute x 60, one Pick per SKU line in the order drawn, at the
-    SKU's face (sku_face), qty = cases; user_id None -- the operator pool assigns
-    the operator (docs/order_feed_format.md). One order = one tour.
+    released_at = minute x 60, one Pick per SKU line at the SKU's face (sku_face),
+    qty = cases; user_id None -- the operator pool assigns the operator
+    (docs/order_feed_format.md). One order = one tour. The picks are put in visit
+    order by `router` under `routing_rule` (src/reslot/sim/routing.py) once, here,
+    so every policy gets the same sequence, as with a real tour's scan order in
+    replay; without a router they stay in SKU-draw order.
 
     Minutes walked: mode 'default' -- the team generator as written, each day's shift
     (shift_start_hour, generator.shift_minutes long), multiplier 1; mode
@@ -184,7 +187,7 @@ class GeneratorSource:
     def __init__(self, generator, sku_face: dict, start: pd.Timestamp, days: int, mode: str = "default",
                  hour_share: list | dict | None = None, day_share: list | None = None, shift_start_hour: int = 6,
                  layout: dict | None = None, inputs: list | None = None, keep_orders: bool = True,
-                 label: str | None = None):
+                 label: str | None = None, router=None, routing_rule: str = "draw"):
         if mode not in ("default", "empirical"):
             raise ValueError(f"generator mode must be 'default' or 'empirical', got {mode!r}")
         if mode == "empirical" and (hour_share is None or day_share is None):
@@ -194,6 +197,9 @@ class GeneratorSource:
             raise ValueError(f"{len(missing)} generator SKUs have no face, e.g. {missing[:3]}")
         self.gen, self.sku_face, self.mode = generator, dict(sku_face), mode
         self.label = label or mode
+        self.router, self.routing_rule = router, routing_rule
+        if routing_rule != "draw" and router is None:
+            raise ValueError(f"routing rule {routing_rule!r} needs a router")
         self.start, self.days = pd.Timestamp(start), int(days)
         self.hour_share, self.day_share, self.shift_start_hour = hour_share, day_share, int(shift_start_hour)
         self.layout = dict(layout or {})
@@ -224,8 +230,11 @@ class GeneratorSource:
 
     def _tour(self, o) -> Tour:
         ts = self.start + pd.Timedelta(minutes=o.minute)
+        lines = list(o.lines)
+        if self.router is not None and self.routing_rule != "draw":
+            lines = [lines[i] for i in self.router.order([self.sku_face[s] for s, _ in lines], self.routing_rule)]
         picks = []
-        for sku, cases in o.lines:
+        for sku, cases in lines:
             self._event += 1
             picks.append(Pick(self._event, ts, self.sku_face[sku], float(cases), None))
         t = Tour(self._n_tours, o.order_id, None, float(o.minute * 60), tuple(picks), 0)
@@ -264,4 +273,4 @@ class GeneratorSource:
                 "orders_generated": self._n_tours, "skus": len(self.gen.skus),
                 "profile_source": getattr(self.gen.profile, "source", None),
                 "affinity_initial": self.affinity_initial, "affinity_now": float(self.gen.affinity),
-                "layout": self.layout, "controls": list(self.controls)}
+                "routing_rule": self.routing_rule, "layout": self.layout, "controls": list(self.controls)}

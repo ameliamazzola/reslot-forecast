@@ -37,7 +37,11 @@ def net():
 def profile(tmp_path_factory):
     p = tmp_path_factory.mktemp("prof") / "plan.csv"
     TG.pick_rows(start=TG.PLAN_START, days=30, n_orders=900).to_csv(p, index=False)
-    return G.fit_profile(load_wms_picks(p, TG.FMT), TG.SCOPE, TG.PLAN_START, TG.PLAN_END, TG.CLUSTER_CFG)
+    from reslot.sim.racksmart import face_items
+    ev = load_wms_picks(p, TG.FMT)
+    prof = G.fit_profile(ev, TG.SCOPE, TG.PLAN_START, TG.PLAN_END, TG.CLUSTER_CFG)
+    prof["face_items"] = {str(k): str(v) for k, v in face_items(ev, TG.SCOPE, TG.PLAN_END).items()}
+    return prof
 
 
 def make_run(net, profile, speed=FAST, speeds=(1, 10, 60, 600, 3000, FAST), hours=4.0, seed=7, **g):
@@ -153,6 +157,7 @@ def test_run_live_writes_a_non_citable_manifest(tmp_path, monkeypatch, net, prof
     cfg["trip_ends"].update(start_stop="D", end_stop="D")
     cfg["paths"]["out"] = str(tmp_path / "out")
     cfg["generator"].update(profile_path=str(tmp_path / "profile.json"), orders_per_day=300)
+    cfg["generator"]["routing"]["rule"] = "nearest_neighbour"
     cfg["live"].update(speeds=[1, 10, 60, 600, FAST], speed=FAST)
     (tmp_path / "sim.yaml").write_text(yaml.safe_dump(cfg))
     monkeypatch.setitem(E.LEG_TIME_MODELS, "synthetic", TS.Synthetic)
@@ -173,6 +178,24 @@ def test_run_live_writes_a_non_citable_manifest(tmp_path, monkeypatch, net, prof
         assert m["sim_time_covered"]["seconds"] == 3 * 3600 and m["speeds_used"] == [{"sim_time_s": 0.0, "speed": FAST}]
         assert m["wall_clock"]["start"] and m["wall_clock"]["end"] and m["planning_inputs"]["inputs"] == {}
         assert m["source"]["mode_label"].startswith("empirical")
+        assert m["source"]["routing_rule"] == "nearest_neighbour" and m["source"]["layout"]["sku_to_face"] == "real"
     assert m1["totals"] == m2["totals"] and m1["totals"]["orders_arrived"] > 0
     with pytest.raises(SystemExit, match="127.0.0.1 only"):
         run_script("--host", "0.0.0.0")
+
+
+def test_live_feet_so_far_is_replays_pick_feet(net, profile):
+    """Same quantity: pick-to-pick leg feet within tours, dispatch legs excluded;
+    seconds = operator busy time; both per pick with first picks counted."""
+    from reslot.sim import engine as E
+    run = make_run(net, profile, speed=FAST, hours=48)                 # the whole 2-day window
+    run.start()
+    assert run.wait(60)
+    src = G.make_generator_source(TG.gcfg(mode="empirical", seed=7, orders_per_day=300), TG.SCOPE, net,
+                                  profile, TG.RUN_START, 2)
+    res = E.simulate(src, 3, make_policy("static"), net, TS.Synthetic(), TG.SCOPE, dict(TR.ENDS))
+    t = run.totals()
+    assert t["orders_in_progress_at_stop"] == 0 and t["orders_done"] == len(res.tours)
+    assert t["pick_feet"] == pytest.approx(res.tours["pick_feet"].sum())
+    assert t["picks_done"] == res.tours["n_picks"].sum()
+    assert t["operator_hours"] * 3600 == pytest.approx(res.tours["busy_s"].sum())
