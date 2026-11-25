@@ -303,3 +303,27 @@ def test_boundary_rule_label_names_the_release_window():
         "tours released 2026-10-12 00:00-08:00 (end exclusive), each run to completion; "
         "tours released at or after the cutoff are not counted")
     assert "2026-10-12 00:00 to 2026-10-13 06:00" in L.boundary_rule(pd.Timestamp("2026-10-12"), 30 * 3600)
+
+
+def test_a_line_scanned_in_three_rows_is_one_line_in_replay_and_in_the_measurement():
+    """Replay counts scan rows. One SKU on one order scanned in three rows at one face
+    is one SKU line and one stop visit (two 0-ft legs), and the per-line figures use
+    that, not the rows."""
+    from reslot.sim.workload import build_workload
+    net = TravelNetwork(TS.distances(), TS.crosswalk())
+    t0 = TS.START + pd.Timedelta(hours=8)
+    rows = [("FF001A", "A1", 0), ("FF001A", "A1", 20), ("FF001A", "A1", 40),   # one line, three scan rows
+            ("FF003A", "B2", 90), ("GG001A", "C3", 150)]
+    ev = TS.events([("8001", "U1", str(t0 + pd.Timedelta(seconds=s)), loc, 1.0) for loc, _, s in rows])
+    ev["item_id"] = pd.array([item for _, item, _ in rows], dtype="string")
+    work = build_workload(ev, net, TS.SCOPE, TS.TOUR, TS.START, TS.END)
+    (tour,) = work.tours
+    assert len(tour.picks) == 5 and tour.n_lines == 3 and [p.item_id for p in tour.picks][:3] == ["A1"] * 3
+    res = TS.sim(work.tours, net, operators=1)
+    r = res.tours.iloc[0]
+    assert (r["n_picks"], r["n_lines"], r["n_stop_visits"]) == (5, 3, 3)
+    assert (res.legs["feet"] == 0).sum() == 2                                   # the two repeat rows
+    row = L.replay_window_row(res.tours, 24 * 3600)
+    assert (row["picks"], row["lines"], row["stop_visits"], row["tours"]) == (5, 3, 3, 1)
+    assert row["ft_per_line"] == pytest.approx(row["feet"] / 3) and row["ft_per_pick"] == pytest.approx(row["feet"] / 5)
+    assert row["s_per_line"] == pytest.approx(r["busy_s"] / 3)

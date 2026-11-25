@@ -76,7 +76,9 @@ class SimResult:
     move_cost: float          # priced by move_cost (0 for static)
 
 
-TOUR_COLUMNS = ["tour_id", "order_id", "user_id", "n_picks", "n_dropped", "complete",
+# n_picks: kept pick rows; n_lines: distinct SKUs among them (Tour.n_lines);
+# n_stop_visits: stops visited in route order, consecutive picks at one stop = one visit.
+TOUR_COLUMNS = ["tour_id", "order_id", "user_id", "n_picks", "n_lines", "n_stop_visits", "n_dropped", "complete",
                 "first_location", "first_stop",
                 "arrival_s", "start_s", "end_s", "wait_s", "busy_s", "obs_span_s",
                 "pick_feet", "dispatch_feet", "operators_busy_at_start"]
@@ -150,7 +152,7 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
             emit("first", {"tour_id": t.tour_id, "t": env.now, "stop": stop_of[first]})
             prev_j, prev_loc, prev_stop = j0, first, stop_of[first]
             dispatch_feet = net.feet(start_stop, prev_stop)
-            pick_feet = 0.0
+            pick_feet, visits = 0.0, 1
             for i, j in enumerate(order[1:], start=1):
                 p = t.picks[j]
                 loc = place(p.location)
@@ -170,12 +172,14 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
                                  "feet": leg.feet, "cross_aisle": leg.cross_aisle, "qty": p.qty,
                                  "sim_s": seconds, "obs_s": p.obs_leg_s if same_leg else None})
                 pick_feet += leg.feet
+                visits += stop != prev_stop
                 yield env.timeout(seconds)
                 emit("leg", {"tour_id": t.tour_id, "t": env.now, "to_stop": stop, "feet": leg.feet})
                 prev_j, prev_loc, prev_stop = j, loc, stop
             dispatch_feet += net.feet(prev_stop, end_stop)
             tour_rows.append({"tour_id": t.tour_id, "order_id": t.order_id, "user_id": t.user_id,
-                              "n_picks": len(t.picks), "n_dropped": t.n_dropped,
+                              "n_picks": len(t.picks), "n_lines": t.n_lines, "n_stop_visits": visits,
+                              "n_dropped": t.n_dropped,
                               "complete": t.complete,
                               # the first visit has no leg; recorded so every pick has a stop
                               "first_location": first, "first_stop": stop_of[first],

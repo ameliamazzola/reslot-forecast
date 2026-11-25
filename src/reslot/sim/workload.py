@@ -53,6 +53,9 @@ class Pick:
     # previous pick was dropped or this is the tour's first pick. The
     # leg-model check compares simulated legs against these, nothing else.
     obs_leg_s: float | None
+    # The SKU picked (FROM_ITEM); None when unknown. Counts SKU lines per tour:
+    # several scan rows of one SKU in one tour are one line.
+    item_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,12 @@ class Tour:
     def complete(self) -> bool:
         """No pick dropped: observed first-to-last scan span is comparable."""
         return self.n_dropped == 0
+
+    @property
+    def n_lines(self) -> int:
+        """SKU lines: distinct SKUs among the kept picks (a pick with no SKU is its own line)."""
+        known = {p.item_id for p in self.picks if p.item_id is not None}
+        return len(known) + sum(p.item_id is None for p in self.picks)
 
     @property
     def obs_span_s(self) -> float:
@@ -128,7 +137,8 @@ def build_workload(events: pd.DataFrame, net: TravelNetwork, scope: dict, tour_c
         kept = g["reason"].isna().to_numpy()
         elapsed = g["ts"].diff().dt.total_seconds().to_numpy()
         picks = [Pick(int(r.event_id), r.ts, str(r.from_loc), float(r.qty),
-                      float(elapsed[i]) if i > 0 and kept[i - 1] else None)
+                      float(elapsed[i]) if i > 0 and kept[i - 1] else None,
+                      None if pd.isna(r.item_id) else str(r.item_id).strip())
                  for i, r in enumerate(g.itertuples(index=False)) if kept[i]]
         if picks:
             raw.append((str(k[0]), str(k[1]), picks, int((~kept).sum())))

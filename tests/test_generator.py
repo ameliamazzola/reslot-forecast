@@ -29,6 +29,7 @@ FMT = "%m/%d/%Y %I:%M:%S %p"
 SCOPE = TR.SCOPE
 PLAN_START, PLAN_END = pd.Timestamp("2026-09-12"), pd.Timestamp("2026-10-12")
 RUN_START = PLAN_END
+TG_START = RUN_START
 SKUS = [f"2000{k:04d}" for k in range(20)]                 # SKU k sits at face FF0kkA
 GROUPS = [SKUS[:10], SKUS[10:]]                            # orders draw from one group: two clusters
 CLUSTER_CFG = {"min_support": 0.005, "min_jaccard": 0.10, "resolution": 1.0, "seed": 42}
@@ -224,6 +225,48 @@ def test_noise_floor_is_the_generator_against_itself(net, profile):
     assert G.noise_floor(g, SCOPE, net, profile, RUN_START, end, pairs=2, seed_base=100) == nf
 
 
+def _library(profile):
+    return {tuple((sku, int(c)) for sku, c in o) for o in profile["order_library"]}
+
+
+def test_resample_draws_whole_planning_orders_seeded(net, profile):
+    assert len(profile["order_library"]) == profile["orders"] == 900
+    src = source(net, profile, days=3, mode="resample", orders_per_day=200)
+    tours = list(src.orders())
+    assert len(tours) > 300 and src.describe()["mode_label"].startswith("resample")
+    lib = _library(profile)
+    for o in src.generated:                                         # each one a real order, exactly
+        assert tuple(o.lines) in lib
+    assert {len(t.picks) for t in tours} <= {len(o) for o in lib}
+    assert src.layout["order_library"] == {"orders_in_library": 900, "orders_kept": 900, "lines_left_out_no_face": 0}
+    fresh = drawn(source(net, profile, days=3, mode="resample", orders_per_day=200))
+    assert fresh == drawn(source(net, profile, days=3, mode="resample", orders_per_day=200))   # same seed
+    assert drawn(source(net, profile, days=3, mode="resample", orders_per_day=200, seed=8)) != fresh
+    # same arrival profile as empirical: Mondays only, 10:00-11:00 only
+    hours, days = [0.0] * 24, [0.0] * 7
+    hours[10], days[0] = 1.0, 1.0
+    prof = {**profile, "hour_of_day_share_weekday": hours, "hour_of_day_share_weekend": hours,
+            "day_of_week_share": days}
+    ts = [TG_START + pd.Timedelta(seconds=t.arrival_s)
+          for t in source(net, prof, days=7, mode="resample", orders_per_day=100).orders()]
+    assert ts and {t.hour for t in ts} == {10} and {t.dayofweek for t in ts} == {0}
+
+
+def test_resample_needs_a_profile_with_the_order_library(net, profile):
+    old = {k: v for k, v in profile.items() if k != "order_library"}
+    with pytest.raises(ValueError, match="order library"):
+        source(net, old, mode="resample")
+
+
+def test_resample_leaves_out_lines_of_skus_without_a_face(net, profile):
+    """Real layout: a SKU last picked nowhere usable has no face; its lines go, the rest of the order stays."""
+    prof = {**profile, "face_items": {k: v for k, v in profile["face_items"].items() if v != SKUS[0]}}
+    src = source(net, prof, days=2, mode="resample", orders_per_day=200, sku_to_face="real")
+    list(src.orders())
+    info = src.layout["order_library"]
+    assert info["lines_left_out_no_face"] > 0 and SKUS[0] not in {s for o in src.generated for s, _ in o.lines}
+
+
 def test_the_engine_runs_generated_orders(net, profile):
     src = source(net, profile, days=1)
     trip = dict(TR.ENDS)
@@ -316,6 +359,13 @@ def test_fit_and_compare_scripts_end_to_end(tmp_path, monkeypatch):
     assert m["mode"] == "generator_compare" and m["generator_mode"] == "empirical" and m["hour_profile"] == "split"
     assert m["generator_mode_label"].startswith("empirical")
 
+    monkeypatch.setattr(sys, "argv", ["compare_generator.py", str(tmp_path / "sim.yaml"), "--mode", "resample"])
+    runpy.run_path(str(TR.REPO / "scripts" / "compare_generator.py"), run_name="__main__")
+    d = tmp_path / "out" / "generator_compare_resample_split_20261012_20261108"
+    res = json.loads((d / "comparison.json").read_text())
+    assert all(v["threshold"] == th[k] and isinstance(v["pass"], bool) for k, v in res["scores"].items())
+    assert res["source"]["mode"] == "resample" and len(res["noise_floor"]["seed_pairs"]) == 5
+
 
 # --------------------------------------------------------------------------
 # VMS / vitamin-brand exclusion, mode labels, the repo's config
@@ -353,6 +403,7 @@ def test_vms_and_vitamin_brand_skus_are_left_out_of_the_profile_and_clusters(tmp
     assert prof["excluded_skus"] == ["90000001", "90000003", "90000004"]
     assert "90000002" in prof["sku_rates"] and not set(prof["excluded_skus"]) & set(prof["sku_rates"])
     assert not set(prof["excluded_skus"]) & set(prof["clusters"])
+    assert not set(prof["excluded_skus"]) & {sku for o in prof["order_library"] for sku, _ in o}
     x = prof["exclusion"]
     assert (x["vms_skus"], x["vitamin_brand_skus"], x["vms_skus_without_description"]) == (2, 1, 1)
     # orders 700002, 700005, 700007 had only excluded lines; order 500000 keeps its other lines

@@ -216,3 +216,46 @@ def test_visited_counts_come_from_planning_month_picks_only(tmp_path):
     planning_faces = set(raw.loc[ts < pd.Timestamp("2026-09-21"), "FROM_LOCATION"])
     assert v1 and set(v1) <= planning_faces                             # every visited face was picked in the planning month
     assert "FF005A" not in v1                                           # the canaries' new face
+
+
+
+# --------------------------------------------------------------------------
+# 4. the generator's resample mode: whole orders from the planning window only
+# --------------------------------------------------------------------------
+
+def test_resample_orders_do_not_depend_on_anything_after_the_planning_end(tmp_path):
+    """The profile (and its order library) is fitted on [planning start, planning end).
+    Adding picks at or after the end -- a whole order after it, and the post-end lines
+    of an order that runs across midnight into the run start -- changes nothing: not
+    the profile, not the library, not one resampled order."""
+    import test_generator as TG
+    from reslot.io.wms_picks import load_wms_picks
+    from reslot.sim import generator as G
+
+    base = TG.pick_rows(start=TG.PLAN_START, days=30, n_orders=600)
+    fmt = TG.FMT
+
+    def row(no, ts, item, loc, order):
+        return {"NO": no, "TYPE": "009", "CREATE_DT": pd.Timestamp(ts).strftime(fmt), "USER_NAME": "U1",
+                "FROM_ITEM": item, "FROM_LOCATION": loc, "TO_LOCATION": "V-1", "FROM_QTY": 3, "FROM_UOM": "CS",
+                "ORD_NO": order, "CUST_NAME": "X", "FROM_ZONE": "WZPCK", "TO_ZONE": "WZEQP"}
+
+    end = TG.PLAN_END
+    before = [row(10**6, end - pd.Timedelta(minutes=1), TG.SKUS[0], "FF000A", "777001")]   # in the planning window
+    after = [row(10**6 + 1, end + pd.Timedelta(minutes=1), "99999998", "FF030A", "777001"),  # same order, past the end
+             row(10**6 + 2, end, "99999999", "FF031A", "777002"),                            # a whole order at the end
+             row(10**6 + 3, end + pd.Timedelta(hours=5), "99999999", "FF031A", "777003")]
+    pd.DataFrame(list(base.to_dict("records")) + before).to_csv(tmp_path / "plan.csv", index=False)
+    pd.DataFrame(list(base.to_dict("records")) + before + after).to_csv(tmp_path / "plus.csv", index=False)
+    profiles = [G.fit_profile(load_wms_picks(tmp_path / f, fmt), TG.SCOPE, TG.PLAN_START, end, TG.CLUSTER_CFG)
+                for f in ("plan.csv", "plus.csv")]
+    assert profiles[0] == profiles[1]
+    lib = profiles[1]["order_library"]
+    assert [[TG.SKUS[0], 3]] in lib                                   # order 777001 keeps its pre-end line only
+    assert not {"99999998", "99999999"} & {sku for o in lib for sku, _ in o}
+
+    net = TravelNetwork(*TR.network())
+    drawn = [[(t.order_id, t.arrival_s, tuple((p.location, p.qty) for p in t.picks))
+              for t in G.make_generator_source(TG.gcfg(mode="resample", orders_per_day=200), TG.SCOPE, net, prof,
+                                               TG.RUN_START, 3).orders()] for prof in profiles]
+    assert drawn[0] == drawn[1] and len(drawn[0]) > 300

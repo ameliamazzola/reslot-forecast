@@ -183,11 +183,14 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
     ref = tmp_path / "out" / E.run_dir_name(cfg, "static", "synthetic")
     ref.mkdir(parents=True)
     cut = 4 * 3600
-    pd.DataFrame({"tour_id": [0, 1, 2, 3], "arrival_s": [cut - 100, cut - 50, cut, cut + 10],
-                  "end_s": [cut + 500, cut - 10, cut + 60, cut + 90], "n_picks": [5, 2, 3, 4],
-                  "pick_feet": [400.0, 30.0, 70.0, 90.0], "busy_s": [600.0, 40.0, 60.0, 80.0]}
-                 ).to_csv(ref / "tours.csv", index=False)
+    old = pd.DataFrame({"tour_id": [0, 1, 2, 3], "arrival_s": [cut - 100, cut - 50, cut, cut + 10],
+                        "end_s": [cut + 500, cut - 10, cut + 60, cut + 90], "n_picks": [5, 2, 3, 4],
+                        "pick_feet": [400.0, 30.0, 70.0, 90.0], "busy_s": [600.0, 40.0, 60.0, 80.0]})
+    old.to_csv(ref / "tours.csv", index=False)                       # written before SKU lines existed
     monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "4"])
+    with pytest.raises(SystemExit, match="rerun scripts/run_sim.py"):
+        runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
+    old.assign(n_lines=[4, 1, 3, 4], n_stop_visits=[3, 1, 2, 4]).to_csv(ref / "tours.csv", index=False)
     runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
     m = json.loads(next((tmp_path / "out").glob("live_check_*/manifest.json")).read_text())
     rows = {r["side"]: r for r in m["rows"]}
@@ -199,5 +202,12 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
         assert r["operator_hours"] == pytest.approx(r["s_per_pick"] * r["picks"] / 3600)
     rp = rows["replay static"]
     assert (rp["tours"], rp["picks"], rp["feet"]) == (2, 7, 430.0)                  # tours 0 and 1, whole
+    assert (rp["lines"], rp["stop_visits"]) == (5, 4)
+    assert rp["ft_per_line"] == pytest.approx(430 / 5) and rp["s_per_line"] == pytest.approx(640 / 5)
+    assert rp["ft_per_visit"] == pytest.approx(430 / 4) and rp["ft_per_tour"] == pytest.approx(430 / 2)
+    assert m["primary_unit"] == "SKU line" and "PRIMARY" in m["units"]["line"]
+    for r in rows.values():                                       # generated orders: one pick per SKU line
+        if r["side"].startswith("live"):
+            assert r["lines"] == r["picks"] and r["ft_per_line"] == pytest.approx(r["ft_per_pick"])
     assert rp["operator_hours"] == pytest.approx(640 / 3600) and rp["drain_end_s"] == cut + 500
     assert rp["ft_per_pick"] == pytest.approx(430 / 7) and rp["s_per_pick"] == pytest.approx(640 / 7)

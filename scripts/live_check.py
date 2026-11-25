@@ -15,10 +15,19 @@ however late it finishes; nothing released at or after the cutoff counts.
   replay  the static replay run's tours.csv in paths.out (every tour already run
           to completion), restricted to tours released before the cutoff
 
-Reported per row: tours, picks, feet, operator-hours, feet per pick, seconds per
-pick, and the last tour completion (drain end). Feet = the engine's pick-to-pick
-leg feet (replay tours.pick_feet; live "feet so far"), dispatch legs excluded;
-seconds = operator busy time; both per pick with first picks counted.
+Units. Replay counts scan rows: one SKU on one order can be scanned in several
+rows at one stop (0-ft legs), while a generated order has one pick per SKU line.
+So feet and seconds are reported per
+
+  SKU line     distinct SKU per tour                                   PRIMARY
+  stop visit   consecutive picks at one stop, in route order
+  tour
+  pick row     one scan row (the unit used before; not comparable across sides)
+
+Feet = the engine's pick-to-pick leg feet (tours.pick_feet), dispatch legs
+excluded; seconds = operator busy time (tours.busy_s). Both sides come from the
+engine's tours table (live: the run's own; replay: the static run's tours.csv,
+which must carry n_lines / n_stop_visits -- rerun run_sim.py if it predates them).
 Writes <paths.out>/live_check_<timestamp>/manifest.json.
 """
 import argparse
@@ -43,7 +52,8 @@ from reslot.travel.artifacts import load_travel
 from reslot.utils.manifest import write_manifest
 
 UNTHROTTLED = 1e9
-COLUMNS = ["side", "routing", "tours", "picks", "feet", "operator_hours", "ft_per_pick", "s_per_pick", "drain_end_s"]
+COUNTS = ["side", "routing", "tours", "lines", "stop_visits", "picks", "feet", "operator_hours", "drain_end_s"]
+PER_UNIT = [f"{q}_per_{u}" for u, _, _ in L.UNITS for q in ("ft", "s")]
 
 ap = argparse.ArgumentParser(description="Feet and seconds per pick: live (generated) vs replay (real).")
 ap.add_argument("config", nargs="?", default="configs/sim.yaml")
@@ -95,13 +105,17 @@ ref = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, "static", leg_model.name) 
 ref_inputs = []
 if ref.exists():
     ref_inputs = [ref]
-    rows.append(L.replay_window_row(pd.read_csv(ref), arrival_cutoff_s))
-table = pd.DataFrame(rows, columns=COLUMNS)
+    try:
+        rows.append(L.replay_window_row(pd.read_csv(ref), arrival_cutoff_s))
+    except ValueError as exc:
+        raise SystemExit(f"replay reference {ref}: {exc}")
+table = pd.DataFrame(rows, columns=COUNTS + PER_UNIT)
 
 out = Path(cfg["paths"]["out"]) / f"live_check_{datetime.now().strftime('%Y%m%dT%H%M%S')}"
 manifest = write_manifest(out, {**cfg, "generator": gcfg}, inputs=[profile_path, *ref_inputs, *rs_files],
                           extra={"mode": "live_check", "citable": False, "hours": args.hours, "policy": policy.name,
                                  "boundary_rule": rule,
+                                 "units": {u: label for u, _, label in L.UNITS}, "primary_unit": "SKU line",
                                  "arrival_window": {"start": str(start), "end_exclusive": str(arrival_end),
                                                     "seconds": arrival_cutoff_s},
                                  "operators": cfg["operators"],
@@ -110,10 +124,17 @@ manifest = write_manifest(out, {**cfg, "generator": gcfg}, inputs=[profile_path,
                                  "replay_reference": str(ref) if ref.exists() else None,
                                  "rows": table.astype(object).where(table.notna(), None).to_dict("records")})
 print(f"Boundary: {rule}")
-with pd.option_context("display.width", 200):
-    print(table.round(2).to_string(index=False, na_rep="n/a"))
-print("feet: pick-to-pick, dispatch legs excluded; operator_hours: busy time summed over operators; "
-      "per pick: first picks included; drain_end_s: last counted tour's completion, s from the window start")
+with pd.option_context("display.width", 220):
+    print(table[COUNTS].round(2).to_string(index=False, na_rep="n/a"))
+    per = table[["side"] + PER_UNIT].round(1)
+    per.columns = ["side"] + [f"{q} per {u}{' (PRIMARY)' if u == L.PRIMARY_UNIT else ''}"
+                              for u, _, _ in L.UNITS for q in ("ft", "s")]
+    print()
+    print(per.to_string(index=False, na_rep="n/a"))
+print("PRIMARY unit: SKU line (distinct SKU per tour). Pick rows are not comparable across sides: replay scans "
+      "one line in several rows, the generator emits one pick per line.")
+print("feet: pick-to-pick, dispatch legs excluded; seconds: operator busy time; "
+      "drain_end_s: last counted tour's completion, s from the window start")
 if not ref.exists():
     print(f"no replay reference: {ref} not found (run scripts/run_sim.py --policy static)")
 if manifest["git_dirty"]:

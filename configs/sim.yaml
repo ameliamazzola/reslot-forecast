@@ -166,10 +166,12 @@ generator:
   #   empirical  (live default) lines per order and cases per line drawn from the profile's
   #              planning-window histograms; arrivals every minute at orders_per_day x 7 x
   #              weekday share x hour share / 60 (src/reslot/sim/generator.py)
+  #   resample   whole real orders (SKU set and cases per line) drawn, seeded, from the planning
+  #              window's order library in the profile, on the same arrival profile as empirical
   #   default    "team generator as written (06:00 + 960 min shift)": OrderGenerator with the
   #              `default` parameters below, orders only during each day's shift
   mode: empirical
-  hour_profile: split               # empirical: split = weekday and weekend hour-of-day shares (agreed fix
+  hour_profile: split               # empirical, resample: split = weekday and weekend hour-of-day shares (agreed fix
                                     # for the weekend score, 2026-11-19); single = one profile (first version)
   profile_path: data/processed/generator/profile_20260912_20261011/profile.json   # fit_generator_profile.py
   seed: 20261119

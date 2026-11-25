@@ -1,6 +1,6 @@
 """Generated orders vs real orders over the run window, by total variation distance.
 
-Run:  python scripts/compare_generator.py [configs/sim.yaml] [--mode default|empirical]
+Run:  python scripts/compare_generator.py [configs/sim.yaml] [--mode default|empirical|resample]
                                           [--hour-profile split|single]
 
 Generated: GeneratorSource (config generator, profile generator.profile_path) over
@@ -43,9 +43,10 @@ from reslot.utils.manifest import write_manifest
 
 ap = argparse.ArgumentParser(description="Generated vs real orders over the run window.")
 ap.add_argument("config", nargs="?", default="configs/sim.yaml")
-ap.add_argument("--mode", choices=["default", "empirical"], help="override generator.mode")
+ap.add_argument("--mode", choices=list(G.MODES), help="override generator.mode")
 ap.add_argument("--hour-profile", choices=["split", "single"],
-                help="override generator.hour_profile (empirical): single = the first version, for the before/after")
+                help="override generator.hour_profile (empirical, resample): single = the first version, "
+                     "for the before/after")
 args = ap.parse_args()
 cfg = load_config(args.config)
 gcfg = dict(cfg["generator"])
@@ -83,7 +84,7 @@ if floor:
         v["noise_floor_max"] = floor["scores"][k]["max"]
 
 w = cfg["window"]
-variant = gcfg["mode"] + (f"_{gcfg.get('hour_profile', 'split')}" if gcfg["mode"] == "empirical" else "")
+variant = gcfg["mode"] + (f"_{gcfg.get('hour_profile', 'split')}" if gcfg["mode"] != "default" else "")
 out = Path(cfg["paths"]["out"]) / f"generator_compare_{variant}_{w['start'].replace('-', '')}_{w['end'].replace('-', '')}"
 out.mkdir(parents=True, exist_ok=True)
 drop = ("sku_lines",)

@@ -369,7 +369,8 @@ def serve(run: LiveRun, host: str, port: int, ui_dir) -> ThreadingHTTPServer:
 # sides drain. A tour counts, whole, if and only if it was released in
 # [window start, window start + cutoff); every counted tour is run to completion;
 # nothing released at or after the cutoff counts. Feet = pick-to-pick leg feet,
-# seconds = operator busy time, both per pick with first picks included.
+# seconds = operator busy time; reported per SKU line (primary), stop visit,
+# tour and pick row.
 
 def boundary_rule(start, cutoff_s: float) -> str:
     start = pd.Timestamp(start)
@@ -381,29 +382,50 @@ def boundary_rule(start, cutoff_s: float) -> str:
             "tours released at or after the cutoff are not counted")
 
 
-def window_row(side: str, routing: str, tours: int, picks: int, feet: float, seconds: float,
-               drain_end_s: float | None) -> dict:
-    return {"side": side, "routing": routing, "tours": int(tours), "picks": int(picks), "feet": float(feet),
-            "operator_hours": float(seconds) / 3600, "ft_per_pick": float(feet) / picks if picks else None,
-            "s_per_pick": float(seconds) / picks if picks else None, "drain_end_s": drain_end_s}
+# Units, primary first. Replay counts scan rows -- one SKU on one order can be
+# scanned in several rows at one stop (0-ft legs) -- while a generated order has
+# one pick per SKU line, so the comparable unit is the SKU line.
+UNITS = [("line", "lines", "SKU line: distinct SKU per tour (PRIMARY)"),
+         ("visit", "stop_visits", "stop visit: consecutive picks at one stop, in route order"),
+         ("tour", "tours", "tour"),
+         ("pick", "picks", "pick row: one scan row")]
+PRIMARY_UNIT = "line"
+
+
+def tours_window_row(tours: pd.DataFrame, cutoff_s: float, side: str, routing: str) -> dict:
+    """The engine's tours table on the boundary rule: tours released in [0, cutoff_s),
+    whole, however late they finished. Feet and operator busy seconds per SKU line
+    (primary), per stop visit, per tour and per pick row."""
+    missing = [c for c in ("n_lines", "n_stop_visits") if c not in tours.columns]
+    if missing:
+        raise ValueError(f"tours table has no {missing} (written before SKU lines were recorded): "
+                         "rerun scripts/run_sim.py --policy static")
+    d = tours[(tours["arrival_s"] >= 0) & (tours["arrival_s"] < float(cutoff_s))]
+    feet, secs = float(d["pick_feet"].sum()), float(d["busy_s"].sum())
+    row = {"side": side, "routing": routing, "tours": int(len(d)), "lines": int(d["n_lines"].sum()),
+           "stop_visits": int(d["n_stop_visits"].sum()), "picks": int(d["n_picks"].sum()),
+           "feet": feet, "operator_hours": secs / 3600,
+           "drain_end_s": float(d["end_s"].max()) if len(d) else None}
+    for unit, count, _ in UNITS:
+        n = row[count]
+        row[f"ft_per_{unit}"] = feet / n if n else None
+        row[f"s_per_{unit}"] = secs / n if n else None
+    return row
 
 
 def live_window_row(run: LiveRun, side: str, routing: str) -> dict:
-    """A finished LiveRun with arrival_cutoff_s, measured on the boundary rule. Refuses
-    a run that didn't drain (tours still queued or in progress)."""
+    """A finished LiveRun with arrival_cutoff_s, measured on the boundary rule from
+    the engine's own tours table. Refuses a run that didn't drain (tours still
+    queued or in progress)."""
     if run.arrival_cutoff_s is None or not run.finished.is_set():
         raise ValueError("live_window_row needs a finished run with an arrival cutoff")
     t = run.totals()
     if t["orders_in_progress_at_stop"] or t["queue_length_at_stop"] or t["orders_arrived"] != t["orders_done"]:
         raise ValueError(f"live run did not drain: {t['orders_arrived']} released, {t['orders_done']} done")
-    return window_row(side, routing, t["orders_done"], t["picks_done"], t["pick_feet"], t["operator_hours"] * 3600,
-                      t["sim_time_s"] if t["orders_done"] else None)
+    return tours_window_row(run.result.tours, run.arrival_cutoff_s, side, routing)
 
 
 def replay_window_row(tours: pd.DataFrame, cutoff_s: float, side: str = "replay static",
                       routing: str = "actual scan order") -> dict:
-    """Replay's tours.csv (every tour run to completion) on the boundary rule: the
-    tours released in [0, cutoff_s), whole, however late they finished."""
-    d = tours[(tours["arrival_s"] >= 0) & (tours["arrival_s"] < float(cutoff_s))]
-    return window_row(side, routing, len(d), int(d["n_picks"].sum()), float(d["pick_feet"].sum()),
-                      float(d["busy_s"].sum()), float(d["end_s"].max()) if len(d) else None)
+    """Replay's tours.csv (every tour already run to completion) on the boundary rule."""
+    return tours_window_row(tours, cutoff_s, side, routing)

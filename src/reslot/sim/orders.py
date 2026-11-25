@@ -171,8 +171,8 @@ class GeneratorSource:
     replay; without a router they stay in SKU-draw order.
 
     Minutes walked: mode 'default' -- the team generator as written, each day's shift
-    (shift_start_hour, generator.shift_minutes long), multiplier 1; mode
-    'empirical' -- every minute, multiplier from the hour-of-day and day-of-week
+    (shift_start_hour, generator.shift_minutes long), multiplier 1; modes
+    'empirical' and 'resample' -- every minute, multiplier from the hour-of-day and day-of-week
     shares (generator.minute_multiplier); hour_share is one 24-list or
     {"weekday": [...], "weekend": [...]}.
 
@@ -188,10 +188,10 @@ class GeneratorSource:
                  hour_share: list | dict | None = None, day_share: list | None = None, shift_start_hour: int = 6,
                  layout: dict | None = None, inputs: list | None = None, keep_orders: bool = True,
                  label: str | None = None, router=None, routing_rule: str = "draw"):
-        if mode not in ("default", "empirical"):
-            raise ValueError(f"generator mode must be 'default' or 'empirical', got {mode!r}")
-        if mode == "empirical" and (hour_share is None or day_share is None):
-            raise ValueError("empirical mode needs hour_share and day_share")
+        if mode not in ("default", "empirical", "resample"):
+            raise ValueError(f"generator mode must be 'default', 'empirical' or 'resample', got {mode!r}")
+        if mode != "default" and (hour_share is None or day_share is None):
+            raise ValueError(f"{mode} mode needs hour_share and day_share")
         missing = sorted(set(generator.skus) - set(sku_face))
         if missing:
             raise ValueError(f"{len(missing)} generator SKUs have no face, e.g. {missing[:3]}")
@@ -214,7 +214,7 @@ class GeneratorSource:
 
     # -- what the engine pulls ---------------------------------------------
     def _minutes(self):
-        if self.mode == "empirical":
+        if self.mode != "default":                    # empirical, resample: every minute, on the profile
             yield from range(self.days * 1440)
             return
         first = self.shift_start_hour * 60
@@ -236,7 +236,7 @@ class GeneratorSource:
         picks = []
         for sku, cases in lines:
             self._event += 1
-            picks.append(Pick(self._event, ts, self.sku_face[sku], float(cases), None))
+            picks.append(Pick(self._event, ts, self.sku_face[sku], float(cases), None, str(sku)))
         t = Tour(self._n_tours, o.order_id, None, float(o.minute * 60), tuple(picks), 0)
         self._n_tours += 1
         return t

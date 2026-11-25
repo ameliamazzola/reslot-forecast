@@ -41,6 +41,14 @@ with hour_share (generator.hour_profile):
     single  one hour-of-day profile over all days (the first version, kept so the
             before/after is reproducible)
 Both are fitted on the planning window only.
+
+Resample mode (ResampleOrderGenerator, also a subclass): each generated order is
+a whole real order drawn, with replacement and seeded, from the planning
+window's order library -- its SKU set and cases per line exactly as picked
+(VMS / vitamin-brand SKUs already excluded, lines of SKUs with no face left
+out) -- released on the same empirical arrival profile. Order size, case counts
+and SKU co-occurrence then come from real orders rather than from fitted
+marginals and clusters; the affinity control has no effect in this mode.
 """
 
 from __future__ import annotations
@@ -58,7 +66,9 @@ SCHEMA = "racksmart-generator-profile/1"
 MODE_LABELS = {
     "default": "team generator as written ({h:02d}:00 + {m} min shift)",
     "empirical": "empirical: planning-window line, case, day-of-week and {hours} hour-of-day profile",
+    "resample": "resample: whole planning-window orders, on the day-of-week and {hours} hour-of-day profile",
 }
+MODES = ("default", "empirical", "resample")
 HOUR_PROFILES = {"split": "weekday / weekend", "single": "single"}
 
 
@@ -198,6 +208,10 @@ def fit_profile(events: pd.DataFrame, scope: dict, start, end, cluster_cfg: dict
         raise ValueError(f"no in-scope case-pick orders between {start} and {end}")
     st = order_stats(lines, start, end)
     clusters = fit_clusters(lines, **{k: cluster_cfg[k] for k in ("min_support", "min_jaccard", "resolution", "seed")})
+    # whole orders for resample mode: in release order, lines in first-pick order
+    lib = lines.sort_values(["released", "order_id", "first_ts", "sku"], kind="stable")
+    library = [[[sku, int(c)] for sku, c in zip(g["sku"], g["cases"])]
+               for _, g in lib.groupby(["released", "order_id"], sort=False)]
     return {"schema": SCHEMA, "window": [str(pd.Timestamp(start)), str(pd.Timestamp(end))], "scope": dict(scope),
             "definitions": DEFINITIONS, "days": st["days"], "orders": st["orders"],
             "orders_per_day": st["orders_per_day"],
@@ -209,7 +223,10 @@ def fit_profile(events: pd.DataFrame, scope: dict, start, end, cluster_cfg: dict
             "sku_rates": {s: n / st["days"] for s, n in st["sku_lines"].items()},
             "clusters": clusters, "cluster_settings": dict(cluster_cfg),
             "n_clusters": len(set(clusters.values())), "skus_with_cluster": len(clusters),
-            "excluded_skus": sorted(skip), "exclusion": skip_info}
+            "excluded_skus": sorted(skip), "exclusion": skip_info,
+            "order_library": library,
+            "order_library_rule": "every order in the window after the exclusion: [[sku, cases], ...] in "
+                                  "first-pick order; resample mode draws whole orders from it"}
 
 
 def _int_keys(h: dict) -> dict:
@@ -263,6 +280,38 @@ class EmpiricalOrderGenerator(OrderGenerator):
             raise RuntimeError("could not draw an order with a line count in the fitted support")
         cases = self.rng.choice(self.c_vals, p=self.c_p, size=len(o.lines))
         return GenOrder(o.order_id, minute, list(zip(o.skus, [int(c) for c in cases])))
+
+
+class ResampleOrderGenerator(OrderGenerator):
+    """OrderGenerator whose orders are whole real orders drawn (with replacement,
+    seeded) from a planning-window order library. Arrivals are the parent's
+    (Poisson per minute, scaled by the caller's multiplier). Lines whose SKU is not
+    in the demand profile (no face) are left out of every library order; an order
+    left empty is left out of the library. Affinity is kept for the control log
+    but changes nothing."""
+
+    def __init__(self, profile: DemandProfile, orders_per_day: float, library: list, affinity: float = 0.5,
+                 seed: int = 42):
+        super().__init__(profile, orders_per_day, shift_minutes=1440, affinity=affinity, seed=seed)
+        known = set(profile.rates.index)
+        kept, dropped_lines = [], 0
+        for order in library:
+            lines = [(str(sku), int(c)) for sku, c in order if str(sku) in known]
+            dropped_lines += len(order) - len(lines)
+            if lines:
+                kept.append(lines)
+        if not kept:
+            raise ValueError("resample: no library order has a SKU with a face")
+        self.library = kept
+        self.library_info = {"orders_in_library": len(library), "orders_kept": len(kept),
+                             "lines_left_out_no_face": dropped_lines}
+        self.line_support = {len(o) for o in kept}
+        self.case_support = {c for o in kept for _, c in o}
+
+    def sample_order(self, minute: int) -> GenOrder:
+        lines = self.library[int(self.rng.integers(len(self.library)))]
+        self._n += 1
+        return GenOrder(f"SIM{self._n:06d}", minute, list(lines))
 
 
 def minute_multiplier(gen: OrderGenerator, ts: pd.Timestamp, hour_share, day_share: list) -> float:
@@ -413,8 +462,15 @@ def make_generator_source(gcfg: dict, scope: dict, net, profile: dict, start, da
         gen = EmpiricalOrderGenerator(dp, opd, profile["lines_per_order_hist"], profile["cases_per_line_hist"],
                                       affinity=float(gcfg.get("affinity", 0.5)), seed=int(gcfg["seed"]))
         shift_start = 0
+    elif mode == "resample":
+        if "order_library" not in profile:
+            raise ValueError("generator.mode resample needs the order library in the profile; "
+                             "rerun fit_generator_profile.py")
+        gen = ResampleOrderGenerator(dp, opd, profile["order_library"], affinity=float(gcfg.get("affinity", 0.5)),
+                                     seed=int(gcfg["seed"]))
+        shift_start = 0
     else:
-        raise ValueError(f"generator.mode must be 'default' or 'empirical', got {mode!r}")
+        raise ValueError(f"generator.mode must be one of {MODES}, got {mode!r}")
     hour_profile = gcfg.get("hour_profile", "split")
     if hour_profile == "split":
         if "hour_of_day_share_weekday" not in profile:
@@ -441,7 +497,8 @@ def make_generator_source(gcfg: dict, scope: dict, net, profile: dict, start, da
         router = Router(net, scope, dispatch_stop, wp)
     info = {"sku_to_face": how, "layout_seed": gcfg.get("layout_seed") if how == "synthetic" else None,
             "routing": routing_info,
-            "hour_profile": hour_profile if mode == "empirical" else None,
+            "hour_profile": hour_profile if mode in ("empirical", "resample") else None,
+            "order_library": getattr(gen, "library_info", None),
             "skus_in_profile": int(len(rates)), "skus_with_face": len(mapped),
             "share_of_profile_lines_with_face": float(rates[mapped].sum() / rates.sum()),
             "usable_faces": len(faces), "orders_per_day": opd, "seed": int(gcfg["seed"])}
