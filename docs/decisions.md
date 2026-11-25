@@ -339,3 +339,10 @@ Why. The longer window was adopted after the one-week result showed a net loss. 
 Consequence. Any headline figure states its window. If a policy is negative on one week and positive over 25 days, that is reported as a payback-period finding.
 
 Reverses if. Newer pick data allows a longer out-of-sample window; it is then added as a third window, not swapped in.
+
+2026-11-20 - Live and replay comparison uses a shared arrival window
+Decision. Admit tours from the same half-open arrival window and let queued and active tours finish. Report the window and last tour completion separately. Feet are pick-to-pick; busy seconds are summed across operators; both use all picks, including first picks, as the denominator.
+
+Why. Cutting live work off at the arrival boundary compares partial tours with finished replay tours.
+
+Reverses if. The question changes to work completed by a fixed deadline, in which case both sides need the same completion cutoff.
