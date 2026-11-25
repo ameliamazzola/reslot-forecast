@@ -36,6 +36,7 @@ start, end = window_bounds({"window": rc["planning_window"]})
 run_start, _ = window_bounds(cfg)
 if end > run_start:
     raise SystemExit(f"planning window ends {end}, after the run start {run_start}")
+lookback_start = start - pd.Timedelta(days=1)
 net = load_travel(cfg["travel"]["dir"])
 dispatch = cfg["trip_ends"]["start_stop"]
 net.require_stops(dispatch)
@@ -45,7 +46,7 @@ try:
 except ValueError as exc:
     raise SystemExit(f"not calibrating: {exc}")
 # as planning reads it: one day before the window so tours starting before it are seen, nothing at or after its end
-events, files = S.read_picks(rc["planning_picks"], rc["planning_ts_format"], (start - pd.Timedelta(days=1), end))
+events, files = S.read_picks(rc["planning_picks"], rc["planning_ts_format"], (lookback_start, end))
 events = S.dedup(events)
 work = build_workload(events, net, scope, cfg["tour"], start, end)
 router = R.Router(net, scope, dispatch, R.work_path_series(rt["location_master"]))
@@ -61,7 +62,8 @@ inputs = sorted(set(S.entry_paths(rc["planning_picks"]) + S.check_files(rc.get("
                     + [rt["location_master"], net.sources["distance_table"], net.sources["crosswalk"]]))
 manifest = write_manifest(out.parent, cfg, inputs=inputs,
                           extra={"routing_calibration": res, "source_checks": checks,
-                                 "lookahead": f"reads [{start}, {end}) only; run start {run_start}"})
+                                 "lookahead": (f"scored [{start}, {end}); reads [{lookback_start}, {end}) for tours, "
+                                               f"including carry-in detection; run start {run_start}")})
 
 fp = res["feet_per_pick"]
 print(f"{res['tours']:,} real tours, {res['picks']:,} picks, {start.date()} .. {end.date()} (exclusive)")

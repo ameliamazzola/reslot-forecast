@@ -199,3 +199,107 @@ def test_live_feet_so_far_is_replays_pick_feet(net, profile):
     assert t["pick_feet"] == pytest.approx(res.tours["pick_feet"].sum())
     assert t["picks_done"] == res.tours["n_picks"].sum()
     assert t["operator_hours"] * 3600 == pytest.approx(res.tours["busy_s"].sum())
+
+
+def test_arrival_cutoff_drains_active_and_queued_tours():
+    from types import SimpleNamespace
+
+    cutoff = 8 * 3600
+    net = TravelNetwork(TS.distances(), TS.crosswalk())
+    tours = [
+        TS.tour("FF001A", "FF003A", tid=0, arrival=cutoff - 2),
+        TS.tour("FF003A", tid=1, arrival=cutoff - 1),
+        TS.tour("FF003A", "GG001A", tid=2, arrival=cutoff),
+        TS.tour("GG001A", tid=3, arrival=cutoff + 1),
+    ]
+    source = SimpleNamespace(start=TS.START, gen=SimpleNamespace(affinity=0), orders=lambda: iter(tours))
+    run = L.LiveRun(source, make_policy("static"), net, TS.Synthetic(), TS.SCOPE, TS.ENDS, 1,
+                    FAST, [FAST], arrival_cutoff_s=cutoff)
+    run.start()
+    assert run.wait(10)
+
+    replay = TS.sim(tours, net, operators=1).tours
+    admitted = replay[replay["arrival_s"] < cutoff]
+    assert admitted["start_s"].iloc[1] > cutoff
+    assert admitted["dispatch_feet"].sum() > 0
+    totals = run.totals()
+    assert totals["orders_arrived"] == totals["orders_done"] == len(admitted) == 2
+    assert totals["orders_in_progress_at_stop"] == totals["queue_length_at_stop"] == 0
+    assert totals["picks_done"] == admitted["n_picks"].sum() == 3
+    assert totals["pick_feet"] == admitted["pick_feet"].sum() == 15
+    assert totals["operator_hours"] * 3600 == pytest.approx(admitted["busy_s"].sum())
+    assert totals["sim_time_s"] == admitted["end_s"].max() > cutoff
+
+
+def _cutoff_tours(cutoff):
+    """Tour 0 is released 2 s before the cutoff and runs across it; tour 1 is released
+    1 s before it and queues behind tour 0 (one operator); tour 2 is released exactly
+    at the cutoff and tour 3 after it -- neither may count."""
+    return [TS.tour("FF001A", "FF003A", tid=0, arrival=cutoff - 2),
+            TS.tour("FF003A", tid=1, arrival=cutoff - 1),
+            TS.tour("FF003A", "GG001A", tid=2, arrival=cutoff),
+            TS.tour("GG001A", tid=3, arrival=cutoff + 1)]
+
+
+def test_boundary_rule_counts_a_tour_crossing_the_cutoff_whole_on_both_sides():
+    """Arrivals stop at the cutoff, both drain: the tour released before the cutoff
+    that finishes after it counts whole in live and in replay; tours released at or
+    after the cutoff count on neither side, although replay ran them."""
+    from types import SimpleNamespace
+
+    cutoff = 8 * 3600
+    net = TravelNetwork(TS.distances(), TS.crosswalk())
+    tours = _cutoff_tours(cutoff)
+    source = SimpleNamespace(start=TS.START, gen=SimpleNamespace(affinity=0), orders=lambda: iter(tours))
+    run = L.LiveRun(source, make_policy("static"), net, TS.Synthetic(), TS.SCOPE, TS.ENDS, 1,
+                    FAST, [FAST], arrival_cutoff_s=cutoff)
+    run.start()
+    assert run.wait(10)
+    live = L.live_window_row(run, "live", "as released")
+
+    replay_tours = TS.sim(tours, net, operators=1).tours           # replay ran every tour, past the cutoff too
+    assert len(replay_tours) == 4
+    crossing = replay_tours.set_index("tour_id").loc[0]
+    assert crossing["arrival_s"] < cutoff < crossing["end_s"]         # released before, finished after
+    replay = L.replay_window_row(replay_tours, cutoff)
+
+    whole = replay_tours[replay_tours["tour_id"].isin([0, 1])]        # the two tours released before the cutoff
+    for row in (live, replay):
+        assert row["tours"] == 2 and row["picks"] == whole["n_picks"].sum() == 3
+        assert row["feet"] == whole["pick_feet"].sum() == 15            # tour 0's leg counted in full
+        assert row["operator_hours"] * 3600 == pytest.approx(whole["busy_s"].sum())
+        assert row["drain_end_s"] == whole["end_s"].max() > cutoff
+        assert row["ft_per_pick"] == pytest.approx(15 / 3) and row["s_per_pick"] == pytest.approx(whole["busy_s"].sum() / 3)
+    assert {k: v for k, v in live.items() if k not in ("side", "routing")} == \
+           {k: v for k, v in replay.items() if k not in ("side", "routing")}
+    # tours 2 and 3 (released at / after the cutoff) are absent from both rows
+    late = replay_tours[replay_tours["tour_id"].isin([2, 3])]
+    assert replay["picks"] + late["n_picks"].sum() == replay_tours["n_picks"].sum()
+
+
+def test_a_live_run_that_did_not_drain_is_not_comparable(net, profile):
+    from types import SimpleNamespace
+
+    no_cutoff = make_run(net, profile, hours=2)
+    no_cutoff.start()
+    assert no_cutoff.wait(60)
+    with pytest.raises(ValueError, match="arrival cutoff"):
+        L.live_window_row(no_cutoff, "live", "x")
+    # stopped by a sim-time limit 1 s before the cutoff: tour 0 is mid-leg, tour 1 queued
+    cutoff = 8 * 3600
+    tours = _cutoff_tours(cutoff)
+    source = SimpleNamespace(start=TS.START, gen=SimpleNamespace(affinity=0), orders=lambda: iter(tours))
+    run = L.LiveRun(source, make_policy("static"), TravelNetwork(TS.distances(), TS.crosswalk()), TS.Synthetic(),
+                    TS.SCOPE, TS.ENDS, 1, FAST, [FAST], until_s=cutoff - 0.5, arrival_cutoff_s=cutoff)
+    run.start()
+    assert run.wait(10)
+    assert run.totals()["orders_in_progress_at_stop"] == 1
+    with pytest.raises(ValueError, match="did not drain"):
+        L.live_window_row(run, "live", "x")
+
+
+def test_boundary_rule_label_names_the_release_window():
+    assert L.boundary_rule(pd.Timestamp("2026-10-12"), 8 * 3600) == (
+        "tours released 2026-10-12 00:00-08:00 (end exclusive), each run to completion; "
+        "tours released at or after the cutoff are not counted")
+    assert "2026-10-12 00:00 to 2026-10-13 06:00" in L.boundary_rule(pd.Timestamp("2026-10-12"), 30 * 3600)

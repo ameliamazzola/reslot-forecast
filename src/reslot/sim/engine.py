@@ -99,7 +99,8 @@ class _Release(simpy.events.Event):
 def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegTimeModel,
              scope: dict, trip_ends: dict,
              move_cost: Callable[[list], float] | None = None,
-             env: simpy.Environment | None = None, observer: Callable[[str, dict], None] | None = None) -> SimResult:
+             env: simpy.Environment | None = None, observer: Callable[[str, dict], None] | None = None,
+             *, arrival_cutoff_s: float | None = None) -> SimResult:
     """Run every order the source releases; one row per tour.
 
     orders:   an OrderSource (anything with .orders()) or an iterable of Tours.
@@ -110,6 +111,7 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
     observer: optional callback(event, payload) for streaming ('release', 'start',
               'first' (the tour's first pick and its stop), 'leg', 'done'); it sees
               results only, never future orders.
+    arrival_cutoff_s: exclusive arrival cutoff; all admitted tours can finish.
     """
     from .orders import ArrivedOrders
 
@@ -195,6 +197,8 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
             if last is not None and key < last:
                 raise ValueError(f"order {t.tour_id} released at {t.arrival_s}, before the previous order")
             last = key
+            if arrival_cutoff_s is not None and t.arrival_s >= arrival_cutoff_s:
+                break
             if t.arrival_s > env.now:
                 yield _Release(env, t.arrival_s - env.now)
             view._release(t)

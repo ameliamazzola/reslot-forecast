@@ -113,7 +113,7 @@ class LiveRun:
 
     def __init__(self, source, policy, net, leg_model, scope: dict, trip_ends: dict, operators: int,
                  speed: float, speeds: list, until_s: float | None = None, move_cost=None,
-                 max_events_per_second: float = 4.0):
+                 max_events_per_second: float = 4.0, *, arrival_cutoff_s: float | None = None):
         if float(speed) not in [float(s) for s in speeds]:
             raise ValueError(f"speed {speed} is not one of {speeds}")
         self.source, self.policy, self.net, self.leg_model = source, policy, net, leg_model
@@ -121,6 +121,7 @@ class LiveRun:
         self.speeds, self.move_cost = [float(s) for s in speeds], move_cost
         self.min_interval = 1.0 / float(max_events_per_second)
         self.env = LiveEnvironment(speed, until_s)
+        self.arrival_cutoff_s = arrival_cutoff_s
         self.start_ts = pd.Timestamp(source.start)
         self.speeds_used = [{"sim_time_s": 0.0, "speed": float(speed)}]
         self._lock = threading.Lock()
@@ -229,7 +230,7 @@ class LiveRun:
         try:
             self.result = simulate(self.source, self.operators, self.policy, self.net, self.leg_model,
                                    self.scope, self.trip_ends, move_cost=self.move_cost, env=self.env,
-                                   observer=self._observe)
+                                   observer=self._observe, arrival_cutoff_s=self.arrival_cutoff_s)
         except BaseException as exc:            # surfaced by wait()/stop()
             self.error = exc
         finally:
@@ -306,10 +307,13 @@ class _Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def _events(self):
+        # The stream is the whole connection: once it ends (or the client leaves),
+        # the handler closes it instead of waiting for another request on it.
+        self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.end_headers()
         q = self.run.subscribe()
         try:
@@ -356,3 +360,50 @@ def serve(run: LiveRun, host: str, port: int, ui_dir) -> ThreadingHTTPServer:
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True, name="live-http").start()
     return server
+
+
+# --------------------------------------------------------------------------
+# live vs replay on one measurement boundary (scripts/live_check.py)
+# --------------------------------------------------------------------------
+# Boundary rule (decisions 2026-11-20): arrivals stop at the cutoff and both
+# sides drain. A tour counts, whole, if and only if it was released in
+# [window start, window start + cutoff); every counted tour is run to completion;
+# nothing released at or after the cutoff counts. Feet = pick-to-pick leg feet,
+# seconds = operator busy time, both per pick with first picks included.
+
+def boundary_rule(start, cutoff_s: float) -> str:
+    start = pd.Timestamp(start)
+    end = start + pd.Timedelta(seconds=float(cutoff_s))
+    same_day = end.normalize() == start.normalize()
+    span = (f"{start:%Y-%m-%d} {start:%H:%M}-{end:%H:%M}" if same_day
+            else f"{start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M}")
+    return (f"tours released {span} (end exclusive), each run to completion; "
+            "tours released at or after the cutoff are not counted")
+
+
+def window_row(side: str, routing: str, tours: int, picks: int, feet: float, seconds: float,
+               drain_end_s: float | None) -> dict:
+    return {"side": side, "routing": routing, "tours": int(tours), "picks": int(picks), "feet": float(feet),
+            "operator_hours": float(seconds) / 3600, "ft_per_pick": float(feet) / picks if picks else None,
+            "s_per_pick": float(seconds) / picks if picks else None, "drain_end_s": drain_end_s}
+
+
+def live_window_row(run: LiveRun, side: str, routing: str) -> dict:
+    """A finished LiveRun with arrival_cutoff_s, measured on the boundary rule. Refuses
+    a run that didn't drain (tours still queued or in progress)."""
+    if run.arrival_cutoff_s is None or not run.finished.is_set():
+        raise ValueError("live_window_row needs a finished run with an arrival cutoff")
+    t = run.totals()
+    if t["orders_in_progress_at_stop"] or t["queue_length_at_stop"] or t["orders_arrived"] != t["orders_done"]:
+        raise ValueError(f"live run did not drain: {t['orders_arrived']} released, {t['orders_done']} done")
+    return window_row(side, routing, t["orders_done"], t["picks_done"], t["pick_feet"], t["operator_hours"] * 3600,
+                      t["sim_time_s"] if t["orders_done"] else None)
+
+
+def replay_window_row(tours: pd.DataFrame, cutoff_s: float, side: str = "replay static",
+                      routing: str = "actual scan order") -> dict:
+    """Replay's tours.csv (every tour run to completion) on the boundary rule: the
+    tours released in [0, cutoff_s), whole, however late they finished."""
+    d = tours[(tours["arrival_s"] >= 0) & (tours["arrival_s"] < float(cutoff_s))]
+    return window_row(side, routing, len(d), int(d["n_picks"].sum()), float(d["pick_feet"].sum()),
+                      float(d["busy_s"].sum()), float(d["end_s"].max()) if len(d) else None)

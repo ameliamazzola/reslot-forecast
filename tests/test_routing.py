@@ -178,10 +178,26 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
     cfg["generator"]["routing"]["rule"] = "nearest_neighbour"
     (tmp_path / "sim.yaml").write_text(yaml.safe_dump(cfg))
     monkeypatch.setitem(E.LEG_TIME_MODELS, "synthetic", TS.Synthetic)
+    # the static replay reference: one tour released before the 4 h cutoff that ends after
+    # it (counted whole), one released exactly at the cutoff and one after (not counted)
+    ref = tmp_path / "out" / E.run_dir_name(cfg, "static", "synthetic")
+    ref.mkdir(parents=True)
+    cut = 4 * 3600
+    pd.DataFrame({"tour_id": [0, 1, 2, 3], "arrival_s": [cut - 100, cut - 50, cut, cut + 10],
+                  "end_s": [cut + 500, cut - 10, cut + 60, cut + 90], "n_picks": [5, 2, 3, 4],
+                  "pick_feet": [400.0, 30.0, 70.0, 90.0], "busy_s": [600.0, 40.0, 60.0, 80.0]}
+                 ).to_csv(ref / "tours.csv", index=False)
     monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "4"])
     runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
     m = json.loads(next((tmp_path / "out").glob("live_check_*/manifest.json")).read_text())
     rows = {r["side"]: r for r in m["rows"]}
-    assert set(rows) == {"live, layout real", "live, layout synthetic"} and m["citable"] is False
-    for r in rows.values():
+    assert set(rows) == {"live, layout real", "live, layout synthetic", "replay static"} and m["citable"] is False
+    assert m["boundary_rule"].startswith("tours released 2026-10-12 00:00-04:00 (end exclusive), each run to completion")
+    for side in ("live, layout real", "live, layout synthetic"):
+        r = rows[side]
         assert r["routing"] == "nearest_neighbour" and r["picks"] > 0 and r["ft_per_pick"] > 0 and r["s_per_pick"] > 0
+        assert r["operator_hours"] == pytest.approx(r["s_per_pick"] * r["picks"] / 3600)
+    rp = rows["replay static"]
+    assert (rp["tours"], rp["picks"], rp["feet"]) == (2, 7, 430.0)                  # tours 0 and 1, whole
+    assert rp["operator_hours"] == pytest.approx(640 / 3600) and rp["drain_end_s"] == cut + 500
+    assert rp["ft_per_pick"] == pytest.approx(430 / 7) and rp["s_per_pick"] == pytest.approx(640 / 7)
