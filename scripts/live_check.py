@@ -1,7 +1,10 @@
 """Live-vs-replay check: feet and seconds per pick, generated vs real tours.
 
 Run:  python scripts/live_check.py [configs/sim.yaml] [--hours 8] [--policy static] [--seed N]
-                                   [--layouts real synthetic]
+                                   [--layouts real synthetic] [--mode default|empirical|resample]
+
+--mode overrides generator.mode for this run only (default: the config's); the
+mode and its description label every live row and go into the manifest.
 
 Measurement boundary (decisions 2026-11-20): arrivals stop at --hours and both
 sides drain. A tour counts, whole, if and only if it was released in
@@ -61,6 +64,7 @@ ap.add_argument("--hours", type=float, default=8.0, help="arrival cutoff, sim ho
 ap.add_argument("--policy", default="static", choices=["static", *METHODS])
 ap.add_argument("--seed", type=int)
 ap.add_argument("--layouts", nargs="+", default=["real", "synthetic"], choices=["real", "synthetic"])
+ap.add_argument("--mode", choices=list(G.MODES), help="override generator.mode for this run")
 args = ap.parse_args()
 
 cfg = load_config(args.config)
@@ -79,6 +83,9 @@ days = (end - start).days
 gcfg = dict(cfg["generator"])
 if args.seed is not None:
     gcfg["seed"] = args.seed
+if args.mode:
+    gcfg["mode"] = args.mode
+mode = gcfg.get("mode", "empirical")
 profile_path = Path(gcfg["profile_path"])
 profile = json.loads(profile_path.read_text(encoding="utf-8"))
 policy, move_cost, rs_files = make_policy("static"), None, []
@@ -92,12 +99,13 @@ rows = []
 for layout in args.layouts:
     src = G.make_generator_source({**gcfg, "sku_to_face": layout}, cfg["scope"], net, profile, start, days,
                                   dispatch_stop=cfg["trip_ends"]["start_stop"])
+    mode_label = src.label
     run = L.LiveRun(src, policy, net, leg_model, cfg["scope"], cfg["trip_ends"], cfg["operators"], UNTHROTTLED,
                     [UNTHROTTLED], move_cost=move_cost, arrival_cutoff_s=arrival_cutoff_s)
     run.start()
     run.wait()
     try:
-        rows.append(L.live_window_row(run, f"live, layout {layout}", src.routing_rule))
+        rows.append(L.live_window_row(run, f"live {mode}, layout {layout}", src.routing_rule))
     except ValueError as exc:
         raise SystemExit(f"not comparable: {exc}")
 
@@ -111,9 +119,14 @@ if ref.exists():
         raise SystemExit(f"replay reference {ref}: {exc}")
 table = pd.DataFrame(rows, columns=COUNTS + PER_UNIT)
 
-out = Path(cfg["paths"]["out"]) / f"live_check_{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+stamp = datetime.now().strftime('%Y%m%dT%H%M%S')
+out, k = Path(cfg["paths"]["out"]) / f"live_check_{stamp}", 1
+while out.exists():                                   # two runs in one second never share a folder
+    k += 1
+    out = Path(cfg["paths"]["out"]) / f"live_check_{stamp}_{k}"
 manifest = write_manifest(out, {**cfg, "generator": gcfg}, inputs=[profile_path, *ref_inputs, *rs_files],
                           extra={"mode": "live_check", "citable": False, "hours": args.hours, "policy": policy.name,
+                                 "generator_mode": mode, "generator_mode_label": mode_label,
                                  "boundary_rule": rule,
                                  "units": {u: label for u, _, label in L.UNITS}, "primary_unit": "SKU line",
                                  "arrival_window": {"start": str(start), "end_exclusive": str(arrival_end),
@@ -123,6 +136,7 @@ manifest = write_manifest(out, {**cfg, "generator": gcfg}, inputs=[profile_path,
                                  "drop_off_mode": cfg["trip_ends"]["drop_off_mode"],
                                  "replay_reference": str(ref) if ref.exists() else None,
                                  "rows": table.astype(object).where(table.notna(), None).to_dict("records")})
+print(f"Generator: {mode_label}")
 print(f"Boundary: {rule}")
 with pd.option_context("display.width", 220):
     print(table[COUNTS].round(2).to_string(index=False, na_rep="n/a"))
