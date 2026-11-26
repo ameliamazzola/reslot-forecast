@@ -177,7 +177,7 @@ def test_run_live_writes_a_non_citable_manifest(tmp_path, monkeypatch, net, prof
         assert m["source"]["type"] == "generator" and m["source"]["controls"] == []
         assert m["sim_time_covered"]["seconds"] == 3 * 3600 and m["speeds_used"] == [{"sim_time_s": 0.0, "speed": FAST}]
         assert m["wall_clock"]["start"] and m["wall_clock"]["end"] and m["planning_inputs"]["inputs"] == {}
-        assert m["source"]["mode_label"].startswith("empirical")
+        assert m["source"]["mode_label"].startswith("resample")            # the live default
         assert m["source"]["routing_rule"] == "nearest_neighbour" and m["source"]["layout"]["sku_to_face"] == "real"
     assert m1["totals"] == m2["totals"] and m1["totals"]["orders_arrived"] > 0
     with pytest.raises(SystemExit, match="127.0.0.1 only"):
@@ -257,11 +257,12 @@ def test_boundary_rule_counts_a_tour_crossing_the_cutoff_whole_on_both_sides():
     assert run.wait(10)
     live = L.live_window_row(run, "live", "as released")
 
-    replay_tours = TS.sim(tours, net, operators=1).tours           # replay ran every tour, past the cutoff too
+    replay_res = TS.sim(tours, net, operators=1)                    # replay ran every tour, past the cutoff too
+    replay_tours = replay_res.tours
     assert len(replay_tours) == 4
     crossing = replay_tours.set_index("tour_id").loc[0]
     assert crossing["arrival_s"] < cutoff < crossing["end_s"]         # released before, finished after
-    replay = L.replay_window_row(replay_tours, cutoff)
+    replay = L.replay_window_row(replay_tours, cutoff, legs=replay_res.legs)
 
     whole = replay_tours[replay_tours["tour_id"].isin([0, 1])]        # the two tours released before the cutoff
     for row in (live, replay):
@@ -323,7 +324,10 @@ def test_a_line_scanned_in_three_rows_is_one_line_in_replay_and_in_the_measureme
     r = res.tours.iloc[0]
     assert (r["n_picks"], r["n_lines"], r["n_stop_visits"]) == (5, 3, 3)
     assert (res.legs["feet"] == 0).sum() == 2                                   # the two repeat rows
-    row = L.replay_window_row(res.tours, 24 * 3600)
+    row = L.replay_window_row(res.tours, 24 * 3600, legs=res.legs)
     assert (row["picks"], row["lines"], row["stop_visits"], row["tours"]) == (5, 3, 3, 1)
+    assert row["rows_per_line"] == pytest.approx(5 / 3)                 # three rows of A1 count as one line
+    assert row["aisle_changes"] == 1 and row["aisle_changes_per_line"] == pytest.approx(1 / 3)   # FF -> GG
+    assert L.replay_window_row(res.tours, 24 * 3600)["aisle_changes"] is None                    # no legs given
     assert row["ft_per_line"] == pytest.approx(row["feet"] / 3) and row["ft_per_pick"] == pytest.approx(row["feet"] / 5)
     assert row["s_per_line"] == pytest.approx(r["busy_s"] / 3)

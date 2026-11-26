@@ -163,14 +163,14 @@ lookahead_exceptions:
 generator:
   # Live mode's order source: the team's OrderGenerator (src/reslot/orders.py) behind
   # GeneratorSource (src/reslot/sim/orders.py). Never citable (mode: live).
-  #   empirical  (live default) lines per order and cases per line drawn from the profile's
+  #   empirical  lines per order and cases per line drawn from the profile's
   #              planning-window histograms; arrivals every minute at orders_per_day x 7 x
   #              weekday share x hour share / 60 (src/reslot/sim/generator.py)
-  #   resample   whole real orders (SKU set and cases per line) drawn, seeded, from the planning
+  #   resample   (live default) whole real orders (SKU set and cases per line) drawn, seeded, from the planning
   #              window's order library in the profile, on the same arrival profile as empirical
   #   default    "team generator as written (06:00 + 960 min shift)": OrderGenerator with the
   #              `default` parameters below, orders only during each day's shift
-  mode: empirical
+  mode: resample                    # live default since 2026-11-25 (8 h live check, real layout)
   hour_profile: split               # empirical, resample: split = weekday and weekend hour-of-day shares (agreed fix
                                     # for the weekend score, 2026-11-19); single = one profile (first version)
   profile_path: data/processed/generator/profile_20260912_20261011/profile.json   # fit_generator_profile.py

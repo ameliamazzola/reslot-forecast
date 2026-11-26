@@ -419,7 +419,7 @@ def test_modes_are_labelled(net, profile):
 
 def test_repo_config_runs_live_empirical_with_thresholds_set():
     g = yaml.safe_load((TR.REPO / "configs" / "sim.yaml").read_text())["generator"]
-    assert g["mode"] == "empirical" and g["exclude"] == EXCLUDE and g["hour_profile"] == "split"
+    assert g["mode"] == "resample" and g["exclude"] == EXCLUDE and g["hour_profile"] == "split"
     assert g["compare"]["noise_floor"] == {"seed_pairs": 5, "seed_base": 1000}
     assert g["compare"]["thresholds"] == {"orders_per_hour": 0.15, "orders_per_hour_weekday": 0.15,
                                           "orders_per_hour_weekend": 0.15, "lines_per_order": 0.10,

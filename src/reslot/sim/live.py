@@ -392,10 +392,16 @@ UNITS = [("line", "lines", "SKU line: distinct SKU per tour (PRIMARY)"),
 PRIMARY_UNIT = "line"
 
 
-def tours_window_row(tours: pd.DataFrame, cutoff_s: float, side: str, routing: str) -> dict:
+def tours_window_row(tours: pd.DataFrame, cutoff_s: float, side: str, routing: str,
+                     legs: pd.DataFrame | None = None) -> dict:
     """The engine's tours table on the boundary rule: tours released in [0, cutoff_s),
     whole, however late they finished. Feet and operator busy seconds per SKU line
-    (primary), per stop visit, per tour and per pick row."""
+    (primary), per stop visit, per tour and per pick row.
+
+    Diagnostics for the time gap: scan rows per line (picks / lines -- each extra row
+    is one more leg, charged the leg model's fixed time at 0 ft) and aisle changes
+    per line (legs with cross_aisle, from the engine's legs table for the same tours;
+    None when no legs table is given)."""
     missing = [c for c in ("n_lines", "n_stop_visits") if c not in tours.columns]
     if missing:
         raise ValueError(f"tours table has no {missing} (written before SKU lines were recorded): "
@@ -410,6 +416,16 @@ def tours_window_row(tours: pd.DataFrame, cutoff_s: float, side: str, routing: s
         n = row[count]
         row[f"ft_per_{unit}"] = feet / n if n else None
         row[f"s_per_{unit}"] = secs / n if n else None
+    lines = row["lines"]
+    row["rows_per_line"] = row["picks"] / lines if lines else None
+    if legs is not None:
+        mine = legs[legs["tour_id"].isin(d["tour_id"])]
+        ac = int(mine["cross_aisle"].astype(str).str.lower().isin(["true", "1"]).sum())
+        row["aisle_changes"] = ac
+        row["aisle_changes_per_line"] = ac / lines if lines else None
+        row["aisle_changes_per_tour"] = ac / len(d) if len(d) else None
+    else:
+        row["aisle_changes"] = row["aisle_changes_per_line"] = row["aisle_changes_per_tour"] = None
     return row
 
 
@@ -422,10 +438,11 @@ def live_window_row(run: LiveRun, side: str, routing: str) -> dict:
     t = run.totals()
     if t["orders_in_progress_at_stop"] or t["queue_length_at_stop"] or t["orders_arrived"] != t["orders_done"]:
         raise ValueError(f"live run did not drain: {t['orders_arrived']} released, {t['orders_done']} done")
-    return tours_window_row(run.result.tours, run.arrival_cutoff_s, side, routing)
+    return tours_window_row(run.result.tours, run.arrival_cutoff_s, side, routing, legs=run.result.legs)
 
 
 def replay_window_row(tours: pd.DataFrame, cutoff_s: float, side: str = "replay static",
-                      routing: str = "actual scan order") -> dict:
-    """Replay's tours.csv (every tour already run to completion) on the boundary rule."""
-    return tours_window_row(tours, cutoff_s, side, routing)
+                      routing: str = "actual scan order", legs: pd.DataFrame | None = None) -> dict:
+    """Replay's tours.csv (every tour already run to completion) on the boundary rule;
+    legs = its legs.csv, for the aisle-change diagnostic."""
+    return tours_window_row(tours, cutoff_s, side, routing, legs=legs)

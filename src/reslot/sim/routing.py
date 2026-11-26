@@ -86,6 +86,10 @@ class Router:
             return out
         raise ValueError(f"unknown routing rule {rule!r}; one of {RULES}")
 
+    def aisle_changes(self, locations: list) -> int:
+        """Consecutive picks in different aisles, as the engine marks cross_aisle."""
+        return int(sum(self.aisle_of[a] != self.aisle_of[b] for a, b in zip(locations, locations[1:])))
+
     def feet(self, locations: list) -> float:
         """Pick-to-pick feet in the given order (dispatch legs excluded), as the engine sums them."""
         s = [self.stop_of[l] for l in locations]
@@ -132,12 +136,16 @@ def calibrate(tours: list, router: Router, rules=RULES, seed: int = 0) -> dict:
     picks = sum(len(t.picks) for t in tours)
     rng = np.random.default_rng(seed)
     actual_ft, rule_ft, rho = 0.0, {r: 0.0 for r in rules}, {r: [] for r in rules}
+    actual_ac, rule_ac, lines = 0, {r: 0 for r in rules}, 0
     for t in tours:
         locs = [p.location for p in t.picks]
+        lines += t.n_lines
         actual_ft += router.feet(locs)
+        actual_ac += router.aisle_changes(locs)
         for r in rules:
             o = [int(i) for i in rng.permutation(len(locs))] if r == "draw" else router.order(locs, r)
             rule_ft[r] += router.feet([locs[i] for i in o])
+            rule_ac[r] += router.aisle_changes([locs[i] for i in o])
             if len(o) >= 3:
                 rank = np.empty(len(o))
                 rank[o] = np.arange(len(o))
@@ -146,7 +154,12 @@ def calibrate(tours: list, router: Router, rules=RULES, seed: int = 0) -> dict:
     per = {r: rule_ft[r] / picks if picks else 0.0 for r in rules}
     cands = [r for r in rules if r in CANDIDATES]
     chosen = min(cands, key=lambda r: (abs(per[r] - actual), cands.index(r)))
-    return {"tours": len(tours), "picks": picks, "feet_per_pick": {"actual_scan_order": actual, **per},
+    per_line = lambda x: x / lines if lines else 0.0
+    return {"tours": len(tours), "picks": picks, "lines": lines, "rows_per_line": picks / lines if lines else None,
+            "feet_per_line": {"actual_scan_order": per_line(actual_ft), **{r: per_line(rule_ft[r]) for r in rules}},
+            "aisle_changes_per_line": {"actual_scan_order": per_line(actual_ac),
+                                       **{r: per_line(rule_ac[r]) for r in rules}},
+            "feet_per_pick": {"actual_scan_order": actual, **per},
             "abs_diff_from_actual": {r: abs(per[r] - actual) for r in rules},
             "median_spearman_with_scan_order": {r: (float(np.nanmedian(v)) if v else None) for r, v in rho.items()},
             "chosen": chosen, "candidates": cands, "draw_seed": seed,

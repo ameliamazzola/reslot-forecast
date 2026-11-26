@@ -27,6 +27,10 @@ So feet and seconds are reported per
   tour
   pick row     one scan row (the unit used before; not comparable across sides)
 
+Diagnostics for the time gap, both sides: scan rows per SKU line and aisle
+changes per line and per tour (legs with cross_aisle; replay's from legs.csv
+beside tours.csv).
+
 Feet = the engine's pick-to-pick leg feet (tours.pick_feet), dispatch legs
 excluded; seconds = operator busy time (tours.busy_s). Both sides come from the
 engine's tours table (live: the run's own; replay: the static run's tours.csv,
@@ -57,6 +61,7 @@ from reslot.utils.manifest import write_manifest
 UNTHROTTLED = 1e9
 COUNTS = ["side", "routing", "tours", "lines", "stop_visits", "picks", "feet", "operator_hours", "drain_end_s"]
 PER_UNIT = [f"{q}_per_{u}" for u, _, _ in L.UNITS for q in ("ft", "s")]
+DIAG = ["rows_per_line", "aisle_changes", "aisle_changes_per_line", "aisle_changes_per_tour"]
 
 ap = argparse.ArgumentParser(description="Feet and seconds per pick: live (generated) vs replay (real).")
 ap.add_argument("config", nargs="?", default="configs/sim.yaml")
@@ -113,11 +118,15 @@ ref = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, "static", leg_model.name) 
 ref_inputs = []
 if ref.exists():
     ref_inputs = [ref]
+    ref_legs = ref.with_name("legs.csv")
+    legs = pd.read_csv(ref_legs) if ref_legs.exists() else None
+    if legs is not None:
+        ref_inputs.append(ref_legs)
     try:
-        rows.append(L.replay_window_row(pd.read_csv(ref), arrival_cutoff_s))
+        rows.append(L.replay_window_row(pd.read_csv(ref), arrival_cutoff_s, legs=legs))
     except ValueError as exc:
         raise SystemExit(f"replay reference {ref}: {exc}")
-table = pd.DataFrame(rows, columns=COUNTS + PER_UNIT)
+table = pd.DataFrame(rows, columns=COUNTS + PER_UNIT + DIAG)
 
 stamp = datetime.now().strftime('%Y%m%dT%H%M%S')
 out, k = Path(cfg["paths"]["out"]) / f"live_check_{stamp}", 1
@@ -145,8 +154,12 @@ with pd.option_context("display.width", 220):
                               for u, _, _ in L.UNITS for q in ("ft", "s")]
     print()
     print(per.to_string(index=False, na_rep="n/a"))
+    print()
+    print(table[["side"] + DIAG].round(3).to_string(index=False, na_rep="n/a"))
 print("PRIMARY unit: SKU line (distinct SKU per tour). Pick rows are not comparable across sides: replay scans "
       "one line in several rows, the generator emits one pick per line.")
+print("diagnostics: rows_per_line = scan rows per SKU line (each extra row is a 0-ft leg charged the leg model's "
+      "fixed time); aisle changes = legs between aisles (charged the cross-aisle term)")
 print("feet: pick-to-pick, dispatch legs excluded; seconds: operator busy time; "
       "drain_end_s: last counted tour's completion, s from the window start")
 if not ref.exists():

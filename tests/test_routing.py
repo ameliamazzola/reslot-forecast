@@ -164,6 +164,10 @@ def test_calibrate_routing_script_writes_the_choice_and_a_manifest(tmp_path, mon
     m = json.loads((tmp_path / "cal" / "manifest.json").read_text())
     assert m["routing_calibration"]["chosen"] == res["chosen"] and "2026-10-12" in m["lookahead"]
     assert R.resolve_rule(cfg["generator"]["routing"], pd.Timestamp("2026-10-12"))[0] == res["chosen"]
+    # per SKU line, under each rule and the actual scan order
+    assert res["lines"] > 0 and res["rows_per_line"] == pytest.approx(res["picks"] / res["lines"])
+    for k in ("feet_per_line", "aisle_changes_per_line"):
+        assert set(res[k]) == {"actual_scan_order", *R.RULES} and all(v >= 0 for v in res[k].values())
 
 
 def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path, monkeypatch):
@@ -191,14 +195,18 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
     with pytest.raises(SystemExit, match="rerun scripts/run_sim.py"):
         runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
     old.assign(n_lines=[4, 1, 3, 4], n_stop_visits=[3, 1, 2, 4]).to_csv(ref / "tours.csv", index=False)
+    # its legs.csv: tour 0 changes aisle twice, tour 1 once; tours 2 and 3 (not counted) three times
+    pd.DataFrame({"tour_id": [0, 0, 0, 0, 1, 2, 2, 3], "leg": [1, 2, 3, 4, 1, 1, 2, 1],
+                  "cross_aisle": [True, False, True, False, True, True, True, True]}).to_csv(ref / "legs.csv", index=False)
     runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
     m = json.loads(next((tmp_path / "out").glob("live_check_*/manifest.json")).read_text())
     rows = {r["side"]: r for r in m["rows"]}
-    assert set(rows) == {"live empirical, layout real", "live empirical, layout synthetic", "replay static"}
-    assert m["citable"] is False and m["generator_mode"] == "empirical"
-    assert m["generator_mode_label"].startswith("empirical")
+    # the config's mode (resample, the live default) labels the rows
+    assert set(rows) == {"live resample, layout real", "live resample, layout synthetic", "replay static"}
+    assert m["citable"] is False and m["generator_mode"] == "resample"
+    assert m["generator_mode_label"].startswith("resample")
     assert m["boundary_rule"].startswith("tours released 2026-10-12 00:00-04:00 (end exclusive), each run to completion")
-    for side in ("live empirical, layout real", "live empirical, layout synthetic"):
+    for side in ("live resample, layout real", "live resample, layout synthetic"):
         r = rows[side]
         assert r["routing"] == "nearest_neighbour" and r["picks"] > 0 and r["ft_per_pick"] > 0 and r["s_per_pick"] > 0
         assert r["operator_hours"] == pytest.approx(r["s_per_pick"] * r["picks"] / 3600)
@@ -208,21 +216,27 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
     assert rp["ft_per_line"] == pytest.approx(430 / 5) and rp["s_per_line"] == pytest.approx(640 / 5)
     assert rp["ft_per_visit"] == pytest.approx(430 / 4) and rp["ft_per_tour"] == pytest.approx(430 / 2)
     assert m["primary_unit"] == "SKU line" and "PRIMARY" in m["units"]["line"]
+    # diagnostics: scan rows per line and aisle changes, replay's from its legs.csv
+    assert rp["rows_per_line"] == pytest.approx(7 / 5) and rp["aisle_changes"] == 3
+    assert rp["aisle_changes_per_line"] == pytest.approx(3 / 5) and rp["aisle_changes_per_tour"] == pytest.approx(1.5)
+    for side in ("live resample, layout real", "live resample, layout synthetic"):
+        r = rows[side]
+        assert r["rows_per_line"] == 1 and r["aisle_changes"] is not None and r["aisle_changes"] >= 0
     for r in rows.values():                                       # generated orders: one pick per SKU line
         if r["side"].startswith("live"):
             assert r["lines"] == r["picks"] and r["ft_per_line"] == pytest.approx(r["ft_per_pick"])
 
     # --mode overrides generator.mode for this run only, and labels it
     monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "4",
-                                      "--mode", "resample", "--layouts", "real"])
+                                      "--mode", "empirical", "--layouts", "real"])
     runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
     found = [json.loads(q.read_text()) for q in (tmp_path / "out").glob("live_check_*/manifest.json")]
     assert len(found) == 2                                            # the first run's manifest is kept
-    (m2,) = [x for x in found if x["generator_mode"] == "resample"]
-    assert m2["generator_mode_label"].startswith("resample")
+    (m2,) = [x for x in found if x["generator_mode"] == "empirical"]
+    assert m2["generator_mode_label"].startswith("empirical")
     rows2 = {r["side"]: r for r in m2["rows"]}
-    assert set(rows2) == {"live resample, layout real", "replay static"}
-    assert rows2["live resample, layout real"]["tours"] > 0 and rows2["replay static"] == rp
-    assert yaml.safe_load((tmp_path / "sim.yaml").read_text())["generator"]["mode"] == "empirical"
+    assert set(rows2) == {"live empirical, layout real", "replay static"}
+    assert rows2["live empirical, layout real"]["tours"] > 0 and rows2["replay static"] == rp
+    assert yaml.safe_load((tmp_path / "sim.yaml").read_text())["generator"]["mode"] == "resample"
     assert rp["operator_hours"] == pytest.approx(640 / 3600) and rp["drain_end_s"] == cut + 500
     assert rp["ft_per_pick"] == pytest.approx(430 / 7) and rp["s_per_pick"] == pytest.approx(640 / 7)

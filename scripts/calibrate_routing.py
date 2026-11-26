@@ -10,7 +10,9 @@ the travel network. Each routing rule (src/reslot/sim/routing.py: draw,
 work_path, aisle_serpentine, nearest_neighbour) re-orders every tour's picks;
 pick-to-pick feet per pick (dispatch legs excluded, as replay's pick_feet) is
 compared with the tours' actual scan order. The rule closest to actual is
-chosen; generator.routing.rule: calibrated uses it.
+chosen; generator.routing.rule: calibrated uses it. Also reported, per SKU line
+(distinct SKU per tour), under each rule and the actual scan order: feet and
+aisle changes (consecutive picks in different aisles), plus scan rows per line.
 
 Writes generator.routing.calibration_path (JSON) and a manifest beside it.
 """
@@ -65,14 +67,17 @@ manifest = write_manifest(out.parent, cfg, inputs=inputs,
                                  "lookahead": (f"scored [{start}, {end}); reads [{lookback_start}, {end}) for tours, "
                                                f"including carry-in detection; run start {run_start}")})
 
-fp = res["feet_per_pick"]
-print(f"{res['tours']:,} real tours, {res['picks']:,} picks, {start.date()} .. {end.date()} (exclusive)")
-print(f"{'order':20s} {'ft/pick':>8s} {'diff':>8s} {'median rho':>11s}")
-print(f"{'actual scan order':20s} {fp['actual_scan_order']:8.1f}")
+fp, fl, al = res["feet_per_pick"], res["feet_per_line"], res["aisle_changes_per_line"]
+print(f"{res['tours']:,} real tours, {res['picks']:,} scan rows, {res['lines']:,} SKU lines "
+      f"({res['rows_per_line']:.2f} rows per line), {start.date()} .. {end.date()} (exclusive)")
+print(f"{'order':20s} {'ft/pick':>8s} {'diff':>8s} {'ft/line':>8s} {'aisle chg/line':>15s} {'median rho':>11s}")
+print(f"{'actual scan order':20s} {fp['actual_scan_order']:8.1f} {'':8s} {fl['actual_scan_order']:8.1f} "
+      f"{al['actual_scan_order']:15.3f}")
 for r in R.RULES:
     rho = res["median_spearman_with_scan_order"][r]
-    print(f"{r:20s} {fp[r]:8.1f} {fp[r] - fp['actual_scan_order']:+8.1f} {'' if rho is None else f'{rho:11.3f}'}"
-          f"{'   <- chosen' if r == res['chosen'] else ''}")
+    print(f"{r:20s} {fp[r]:8.1f} {fp[r] - fp['actual_scan_order']:+8.1f} {fl[r]:8.1f} {al[r]:15.3f} "
+          f"{'' if rho is None else f'{rho:11.3f}'}{'   <- chosen' if r == res['chosen'] else ''}")
+print("draw = a seeded random order (the no-routing baseline); chosen by feet per pick, as before")
 if manifest["git_dirty"]:
     print("NOTE working tree is dirty: this run is not citable")
 print(f"wrote {out}")
