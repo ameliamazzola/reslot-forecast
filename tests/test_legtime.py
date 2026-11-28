@@ -51,6 +51,18 @@ def test_predicts_the_fitted_curve_plus_handling(tmp_path, travel_dir):
     assert m.provenance["review"]["outcome"] == "adopted" and len(m.files) == 2
 
 
+def test_terms_split_predict_into_fixed_per_case_cross_aisle_and_distance(tmp_path, travel_dir):
+    m = NetworkFeetLegModel(write_fit(tmp_path, travel_dir))
+    legs = [leg(0), leg(15), leg(15, cross=True, qty=3), leg(500, qty=2)]
+    t = m.terms_frame([g.feet for g in legs], [g.cross_aisle for g in legs], [g.qty for g in legs])
+    assert list(t["fixed"]) == [20.0] * 4 and m.fixed_definition == "coefficients.fixed_s"
+    assert list(t["per_case"]) == [5.0, 5.0, 15.0, 10.0] and list(t["cross_aisle"]) == [0, 0, 30.0, 0]
+    assert list(t["distance"]) == pytest.approx([0.0, 7.5, 7.5, 20.0])          # the curve above fixed
+    for i, g in enumerate(legs):                                                   # the terms are predict()
+        assert sum(t[k][i] for k in ("fixed", "per_case", "cross_aisle", "distance")) == pytest.approx(m.predict(g))
+    assert m.provenance["fixed_term"] == "coefficients.fixed_s"
+
+
 @pytest.mark.parametrize("outcome", ["rejected", "not_reviewed", None])
 def test_refuses_a_fit_the_review_did_not_adopt(tmp_path, travel_dir, outcome):
     with pytest.raises(LegModelError, match="review outcome"):

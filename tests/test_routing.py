@@ -18,6 +18,7 @@ import test_racksmart as TR
 import test_sim as TS
 from reslot.io.wms_picks import load_wms_picks
 from reslot.sim import generator as G
+from reslot.sim import live as L
 from reslot.sim import routing as R
 from reslot.sim.workload import Pick, Tour
 from reslot.travel.artifacts import TravelNetwork
@@ -197,7 +198,13 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
     old.assign(n_lines=[4, 1, 3, 4], n_stop_visits=[3, 1, 2, 4]).to_csv(ref / "tours.csv", index=False)
     # its legs.csv: tour 0 changes aisle twice, tour 1 once; tours 2 and 3 (not counted) three times
     pd.DataFrame({"tour_id": [0, 0, 0, 0, 1, 2, 2, 3], "leg": [1, 2, 3, 4, 1, 1, 2, 1],
-                  "cross_aisle": [True, False, True, False, True, True, True, True]}).to_csv(ref / "legs.csv", index=False)
+                  "cross_aisle": [True, False, True, False, True, True, True, True],
+                  "feet": [100.0, 0.0, 200.0, 100.0, 30.0, 50.0, 20.0, 90.0],
+                  "qty": [2.0, 1.0, 1.0, 4.0, 3.0, 1.0, 1.0, 1.0]}).to_csv(ref / "legs.csv", index=False)
+    # its lines.csv: cases per SKU line of tours 0 and 1 (tours 2 and 3 not counted)
+    pd.DataFrame({"tour_id": [0, 0, 0, 0, 1, 2, 3], "item_id": ["a", "b", "c", "d", "e", "f", "g"],
+                  "rows": [2, 1, 1, 1, 2, 3, 4], "cases": [3.0, 1.0, 1.0, 4.0, 5.0, 9.0, 99.0]}
+                 ).to_csv(ref / "lines.csv", index=False)
     runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
     m = json.loads(next((tmp_path / "out").glob("live_check_*/manifest.json")).read_text())
     rows = {r["side"]: r for r in m["rows"]}
@@ -218,10 +225,21 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
     assert m["primary_unit"] == "SKU line" and "PRIMARY" in m["units"]["line"]
     # diagnostics: scan rows per line and aisle changes, replay's from its legs.csv
     assert rp["rows_per_line"] == pytest.approx(7 / 5) and rp["aisle_changes"] == 3
+    # cases per line from lines.csv; seconds per line by term (Synthetic, tours 0 and 1's five legs)
+    assert (rp["cases_per_line_mean"], rp["cases_per_line_median"], rp["cases_per_line_max"]) == (2.8, 3.0, 5.0)
+    assert rp["s_fixed_per_line"] == pytest.approx(10 * 5 / 5)
+    assert rp["s_per_case_per_line"] == pytest.approx(2 * 11 / 5)
+    assert rp["s_cross_aisle_per_line"] == pytest.approx(30 * 3 / 5)
+    assert rp["s_distance_per_line"] == pytest.approx(0.1 * 430 / 5)
+    # the fake legs don't add up to the fake busy seconds: the residual says so
+    assert rp["s_terms_residual_per_line"] == pytest.approx((640 - (50 + 22 + 90 + 43)) / 5)
     assert rp["aisle_changes_per_line"] == pytest.approx(3 / 5) and rp["aisle_changes_per_tour"] == pytest.approx(1.5)
     for side in ("live resample, layout real", "live resample, layout synthetic"):
         r = rows[side]
         assert r["rows_per_line"] == 1 and r["aisle_changes"] is not None and r["aisle_changes"] >= 0
+        assert r["s_terms_residual_per_line"] == pytest.approx(0.0, abs=1e-6)      # simulated by this model
+        assert sum(r[f"s_{k}_per_line"] for k in L.TERMS) == pytest.approx(r["s_per_line"])
+        assert r["cases_per_line_max"] >= r["cases_per_line_p99"] >= r["cases_per_line_median"] >= 1
     for r in rows.values():                                       # generated orders: one pick per SKU line
         if r["side"].startswith("live"):
             assert r["lines"] == r["picks"] and r["ft_per_line"] == pytest.approx(r["ft_per_pick"])
@@ -238,5 +256,20 @@ def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path,
     assert set(rows2) == {"live empirical, layout real", "replay static"}
     assert rows2["live empirical, layout real"]["tours"] > 0 and rows2["replay static"] == rp
     assert yaml.safe_load((tmp_path / "sim.yaml").read_text())["generator"]["mode"] == "resample"
+
+    # --hours full: the whole window, same boundary (every replay tour here was released in it)
+    monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "full",
+                                      "--layouts", "real"])
+    runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
+    found = [json.loads(q.read_text()) for q in (tmp_path / "out").glob("live_check_*/manifest.json")]
+    (m3,) = [x for x in found if x["hours"] == 28 * 24]
+    assert m3["arrival_window"]["end_exclusive"] == "2026-11-09 00:00:00"
+    assert m3["boundary_rule"].startswith("tours released 2026-10-12 00:00 to 2026-11-09 00:00 (end exclusive)")
+    rows3 = {r["side"]: r for r in m3["rows"]}
+    assert rows3["replay static"]["tours"] == 4 and rows3["live resample, layout real"]["tours"] > \
+        rows["live resample, layout real"]["tours"]
+    monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "673"])
+    with pytest.raises(SystemExit):                                   # past the window: refused
+        runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
     assert rp["operator_hours"] == pytest.approx(640 / 3600) and rp["drain_end_s"] == cut + 500
     assert rp["ft_per_pick"] == pytest.approx(430 / 7) and rp["s_per_pick"] == pytest.approx(640 / 7)

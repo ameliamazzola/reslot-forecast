@@ -50,6 +50,10 @@ class Synthetic:
     def predict(self, leg):
         return 10 + 2 * leg.qty + 30 * leg.cross_aisle + 0.1 * leg.feet
 
+    def terms(self, leg):
+        return {"fixed": 10.0, "per_case": 2.0 * leg.qty, "cross_aisle": 30.0 * leg.cross_aisle,
+                "distance": 0.1 * leg.feet}
+
 
 def distances():
     return pd.DataFrame(FEET, dtype=float, index=pd.Index(STOPS, name="stop_id"), columns=STOPS)
@@ -427,7 +431,7 @@ def test_run_sim_end_to_end_on_a_synthetic_transactions_export(travel_dir, tmp_p
     runpy.run_path(str(REPO / "scripts" / "run_sim.py"), run_name="__main__")
 
     run_dir = tmp_path / "runs" / "sim_static_synthetic_20261005_20261011"
-    assert sorted(p.name for p in run_dir.iterdir()) == ["dropped_picks.csv", "legs.csv",
+    assert sorted(p.name for p in run_dir.iterdir()) == ["dropped_picks.csv", "legs.csv", "lines.csv",
                                                          "manifest.json", "tours.csv"]
     m = json.loads((run_dir / "manifest.json").read_text())
     assert m["workload"]["picks_kept"] == 3 and m["workload"]["dropped_by_reason"] == {"check_snap": 1}

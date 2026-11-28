@@ -76,10 +76,17 @@ class NetworkFeetLegModel:
             raise LegModelError(f"{table_path}: grid not increasing or curve not monotone")
         self._d, self._same, self._cross = d, same, cross
         self._per_case = float(coef["per_case_s"])
+        self._cross_s = float(coef["cross_aisle_s"])
+        # The curve is fixed + distance(feet); the fit's own fixed_s splits it. Without
+        # one, the curve at its first grid point stands in (recorded in provenance).
+        self._fixed = float(coef["fixed_s"]) if "fixed_s" in coef else float(same[0])
+        self.fixed_definition = ("coefficients.fixed_s" if "fixed_s" in coef
+                                 else f"same-aisle curve at its first grid point ({d[0]:g} ft)")
         self.files = [str(man_path), str(table_path)]
         self.provenance = {"name": self.name, "source": SOURCE, "manifest": str(man_path),
                            "cost_table": str(table_path), "fit_git_sha": m.get("git_sha"),
                            "fit_config_hash": m.get("config_hash"), "coefficients": coef,
+                           "fixed_term": self.fixed_definition,
                            "review": {k: review.get(k) for k in ("outcome", "n_legs", "n_trips",
                                                                   "mae_difference_feet_minus_work_path",
                                                                   "bootstrap")}}
@@ -87,3 +94,13 @@ class NetworkFeetLegModel:
     def predict(self, leg) -> float:
         curve = self._cross if leg.cross_aisle else self._same
         return float(np.interp(leg.feet, self._d, curve) + self._per_case * leg.qty)
+
+    def terms_frame(self, feet, cross_aisle, qty) -> dict:
+        """predict() split into its terms for arrays of legs: fixed, per_case,
+        cross_aisle, distance (seconds). They sum to predict() leg by leg."""
+        feet, qty = np.asarray(feet, float), np.asarray(qty, float)
+        cross = np.asarray(cross_aisle, bool)
+        n = len(feet)
+        return {"fixed": np.full(n, self._fixed), "per_case": self._per_case * qty,
+                "cross_aisle": self._cross_s * cross,
+                "distance": np.interp(feet, self._d, self._same) - self._fixed}

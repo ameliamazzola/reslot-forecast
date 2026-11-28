@@ -74,6 +74,7 @@ class SimResult:
     legs: pd.DataFrame        # one row per simulated pick-to-pick leg
     moves: list               # policy moves, as reported
     move_cost: float          # priced by move_cost (0 for static)
+    lines: pd.DataFrame | None = None   # one row per SKU line of a finished tour (LINE_COLUMNS)
 
 
 # n_picks: kept pick rows; n_lines: distinct SKUs among them (Tour.n_lines);
@@ -82,6 +83,9 @@ TOUR_COLUMNS = ["tour_id", "order_id", "user_id", "n_picks", "n_lines", "n_stop_
                 "first_location", "first_stop",
                 "arrival_s", "start_s", "end_s", "wait_s", "busy_s", "obs_span_s",
                 "pick_feet", "dispatch_feet", "operators_busy_at_start"]
+# One row per SKU line (distinct SKU) of a finished tour: its scan rows and cases.
+# A pick with no SKU is a line of its own.
+LINE_COLUMNS = ["tour_id", "item_id", "rows", "cases"]
 LEG_COLUMNS = ["tour_id", "leg", "from_location", "to_location", "from_stop", "to_stop",
                "feet", "cross_aisle", "qty", "sim_s", "obs_s"]
 
@@ -127,7 +131,7 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
     env = env or simpy.Environment()
     pool = simpy.Resource(env, capacity=int(operators))
     view = ArrivedOrders(env)
-    tour_rows, leg_rows = [], []
+    tour_rows, leg_rows, line_rows = [], [], []
     emit = observer or (lambda event, payload: None)
     on_arrival = getattr(policy, "on_arrival", None)
 
@@ -188,6 +192,14 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
                               "busy_s": env.now - start, "obs_span_s": t.obs_span_s,
                               "pick_feet": pick_feet, "dispatch_feet": dispatch_feet,
                               "operators_busy_at_start": busy_at_start})
+            by_sku: dict = {}
+            for k, p in enumerate(t.picks):
+                key = p.item_id if p.item_id is not None else ("<no sku>", k)
+                rows, cases = by_sku.get(key, (0, 0.0))
+                by_sku[key] = (rows + 1, cases + p.qty)
+            for key, (rows, cases) in by_sku.items():
+                line_rows.append({"tour_id": t.tour_id, "item_id": key if isinstance(key, str) else None,
+                                  "rows": rows, "cases": cases})
             emit("done", {"tour_id": t.tour_id, "t": env.now, "first_stop": stop_of[first],
                           "pick_feet": pick_feet})
 
@@ -221,7 +233,8 @@ def simulate(orders, operators: int, policy, net: TravelNetwork, leg_model: LegT
     cost = float(move_cost(moves)) if moves else 0.0
     tours_df = pd.DataFrame(tour_rows, columns=TOUR_COLUMNS).sort_values("tour_id").reset_index(drop=True)
     legs_df = pd.DataFrame(leg_rows, columns=LEG_COLUMNS).sort_values(["tour_id", "leg"]).reset_index(drop=True)
-    return SimResult(tours_df, legs_df, moves, cost)
+    lines_df = pd.DataFrame(line_rows, columns=LINE_COLUMNS).sort_values("tour_id", kind="stable").reset_index(drop=True)
+    return SimResult(tours_df, legs_df, moves, cost, lines_df)
 
 
 # --------------------------------------------------------------------------

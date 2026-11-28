@@ -12,6 +12,7 @@ Writes data/processed/sim/sim_<policy>_<leg model>_<start>_<end>[_pallet_fill]/ 
 the suffix marks a notebook method run with the snapshot-free move cost):
   tours.csv           one row per tour: wait, busy, scan span, pick feet, dispatch feet
   legs.csv            one row per simulated pick-to-pick leg, with observed seconds
+  lines.csv           one row per SKU line of a tour: scan rows and cases (live_check's cases per line)
   dropped_picks.csv   every in-window case pick that could not be placed, with its reason
   swaps.csv           notebook methods only: the plan's swaps (notebook swap_list)
   golden_faces.csv    notebook methods only: the plan's golden-zone faces (nearest 10.8% to dispatch)
@@ -104,6 +105,7 @@ run_dir = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, x["policy"], x["leg_ti
 run_dir.mkdir(parents=True, exist_ok=True)
 res.tours.to_csv(run_dir / "tours.csv", index=False)
 res.legs.to_csv(run_dir / "legs.csv", index=False)
+res.lines.to_csv(run_dir / "lines.csv", index=False)
 out.dropped.to_csv(run_dir / "dropped_picks.csv", index=False)
 if policy is not None:
     RS.swap_table(policy).to_csv(run_dir / "swaps.csv", index=False)

@@ -392,8 +392,35 @@ UNITS = [("line", "lines", "SKU line: distinct SKU per tour (PRIMARY)"),
 PRIMARY_UNIT = "line"
 
 
+TERMS = ("fixed", "per_case", "cross_aisle", "distance")
+
+
+def leg_terms(legs: pd.DataFrame, leg_model) -> pd.DataFrame:
+    """Each leg's simulated seconds split by leg-model term (TERMS), from the model's
+    terms_frame (vectorised) or terms(leg); the terms sum to the model's predict()."""
+    cross = legs["cross_aisle"].astype(str).str.lower().isin(["true", "1"]).to_numpy()
+    feet, qty = legs["feet"].to_numpy(float), legs["qty"].to_numpy(float)
+    if hasattr(leg_model, "terms_frame"):
+        t = leg_model.terms_frame(feet, cross, qty)
+    elif hasattr(leg_model, "terms"):
+        from .engine import Leg
+        rows = [leg_model.terms(Leg("", "", "", "", f, bool(c), q)) for f, c, q in zip(feet, cross, qty)]
+        t = {k: [r[k] for r in rows] for k in TERMS}
+    else:
+        raise ValueError(f"leg model {getattr(leg_model, 'name', leg_model)!r} does not report its terms")
+    return pd.DataFrame({"tour_id": legs["tour_id"].to_numpy(), **{k: t[k] for k in TERMS}}, index=legs.index)
+
+
+def _cases_stats(cases: pd.Series) -> dict:
+    if not len(cases):
+        return {f"cases_per_line_{k}": None for k in ("mean", "median", "p99", "max")}
+    return {"cases_per_line_mean": float(cases.mean()), "cases_per_line_median": float(cases.median()),
+            "cases_per_line_p99": float(cases.quantile(0.99)), "cases_per_line_max": float(cases.max())}
+
+
 def tours_window_row(tours: pd.DataFrame, cutoff_s: float, side: str, routing: str,
-                     legs: pd.DataFrame | None = None) -> dict:
+                     legs: pd.DataFrame | None = None, line_table: pd.DataFrame | None = None,
+                     leg_model=None) -> dict:
     """The engine's tours table on the boundary rule: tours released in [0, cutoff_s),
     whole, however late they finished. Feet and operator busy seconds per SKU line
     (primary), per stop visit, per tour and per pick row.
@@ -401,7 +428,10 @@ def tours_window_row(tours: pd.DataFrame, cutoff_s: float, side: str, routing: s
     Diagnostics for the time gap: scan rows per line (picks / lines -- each extra row
     is one more leg, charged the leg model's fixed time at 0 ft) and aisle changes
     per line (legs with cross_aisle, from the engine's legs table for the same tours;
-    None when no legs table is given)."""
+    None when no legs table is given). With legs and leg_model: seconds per line by
+    leg-model term (s_<term>_per_line, TERMS) and the residual busy seconds the terms
+    don't account for (0 when the legs were simulated by this model). With line_table
+    (the engine's lines table): cases per line, mean / median / p99 / max."""
     missing = [c for c in ("n_lines", "n_stop_visits") if c not in tours.columns]
     if missing:
         raise ValueError(f"tours table has no {missing} (written before SKU lines were recorded): "
@@ -426,10 +456,25 @@ def tours_window_row(tours: pd.DataFrame, cutoff_s: float, side: str, routing: s
         row["aisle_changes_per_tour"] = ac / len(d) if len(d) else None
     else:
         row["aisle_changes"] = row["aisle_changes_per_line"] = row["aisle_changes_per_tour"] = None
+    if legs is not None and leg_model is not None:
+        terms = leg_terms(legs[legs["tour_id"].isin(d["tour_id"])], leg_model)
+        total = 0.0
+        for k in TERMS:
+            v = float(terms[k].sum())
+            total += v
+            row[f"s_{k}_per_line"] = v / lines if lines else None
+        row["s_terms_residual_per_line"] = (secs - total) / lines if lines else None
+    else:
+        for k in (*TERMS, "terms_residual"):
+            row[f"s_{k}_per_line"] = None
+    if line_table is not None:
+        row.update(_cases_stats(line_table.loc[line_table["tour_id"].isin(d["tour_id"]), "cases"].astype(float)))
+    else:
+        row.update(_cases_stats(pd.Series(dtype=float)))
     return row
 
 
-def live_window_row(run: LiveRun, side: str, routing: str) -> dict:
+def live_window_row(run: LiveRun, side: str, routing: str, leg_model=None) -> dict:
     """A finished LiveRun with arrival_cutoff_s, measured on the boundary rule from
     the engine's own tours table. Refuses a run that didn't drain (tours still
     queued or in progress)."""
@@ -438,11 +483,14 @@ def live_window_row(run: LiveRun, side: str, routing: str) -> dict:
     t = run.totals()
     if t["orders_in_progress_at_stop"] or t["queue_length_at_stop"] or t["orders_arrived"] != t["orders_done"]:
         raise ValueError(f"live run did not drain: {t['orders_arrived']} released, {t['orders_done']} done")
-    return tours_window_row(run.result.tours, run.arrival_cutoff_s, side, routing, legs=run.result.legs)
+    return tours_window_row(run.result.tours, run.arrival_cutoff_s, side, routing, legs=run.result.legs,
+                            line_table=run.result.lines, leg_model=leg_model)
 
 
 def replay_window_row(tours: pd.DataFrame, cutoff_s: float, side: str = "replay static",
-                      routing: str = "actual scan order", legs: pd.DataFrame | None = None) -> dict:
+                      routing: str = "actual scan order", legs: pd.DataFrame | None = None,
+                      lines: pd.DataFrame | None = None, leg_model=None) -> dict:
     """Replay's tours.csv (every tour already run to completion) on the boundary rule;
-    legs = its legs.csv, for the aisle-change diagnostic."""
-    return tours_window_row(tours, cutoff_s, side, routing, legs=legs)
+    legs = its legs.csv (aisle changes, term decomposition), lines = its lines.csv
+    (cases per line)."""
+    return tours_window_row(tours, cutoff_s, side, routing, legs=legs, line_table=lines, leg_model=leg_model)

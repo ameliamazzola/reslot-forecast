@@ -255,14 +255,15 @@ def test_boundary_rule_counts_a_tour_crossing_the_cutoff_whole_on_both_sides():
                     FAST, [FAST], arrival_cutoff_s=cutoff)
     run.start()
     assert run.wait(10)
-    live = L.live_window_row(run, "live", "as released")
+    live = L.live_window_row(run, "live", "as released", leg_model=TS.Synthetic())
 
     replay_res = TS.sim(tours, net, operators=1)                    # replay ran every tour, past the cutoff too
     replay_tours = replay_res.tours
     assert len(replay_tours) == 4
     crossing = replay_tours.set_index("tour_id").loc[0]
     assert crossing["arrival_s"] < cutoff < crossing["end_s"]         # released before, finished after
-    replay = L.replay_window_row(replay_tours, cutoff, legs=replay_res.legs)
+    replay = L.replay_window_row(replay_tours, cutoff, legs=replay_res.legs, lines=replay_res.lines,
+                                 leg_model=TS.Synthetic())
 
     whole = replay_tours[replay_tours["tour_id"].isin([0, 1])]        # the two tours released before the cutoff
     for row in (live, replay):
@@ -324,10 +325,36 @@ def test_a_line_scanned_in_three_rows_is_one_line_in_replay_and_in_the_measureme
     r = res.tours.iloc[0]
     assert (r["n_picks"], r["n_lines"], r["n_stop_visits"]) == (5, 3, 3)
     assert (res.legs["feet"] == 0).sum() == 2                                   # the two repeat rows
-    row = L.replay_window_row(res.tours, 24 * 3600, legs=res.legs)
+    row = L.replay_window_row(res.tours, 24 * 3600, legs=res.legs, lines=res.lines, leg_model=TS.Synthetic())
     assert (row["picks"], row["lines"], row["stop_visits"], row["tours"]) == (5, 3, 3, 1)
     assert row["rows_per_line"] == pytest.approx(5 / 3)                 # three rows of A1 count as one line
     assert row["aisle_changes"] == 1 and row["aisle_changes_per_line"] == pytest.approx(1 / 3)   # FF -> GG
     assert L.replay_window_row(res.tours, 24 * 3600)["aisle_changes"] is None                    # no legs given
+    # the engine's lines table: A1's three rows are one line of 3 cases
+    lines = res.lines.set_index("item_id")
+    assert lines.loc["A1", "rows"] == 3 and lines.loc["A1", "cases"] == 3.0 and len(lines) == 3
+    assert (row["cases_per_line_mean"], row["cases_per_line_median"], row["cases_per_line_max"]) == (5 / 3, 1.0, 3.0)
+    assert row["cases_per_line_p99"] == pytest.approx(pd.Series([3.0, 1.0, 1.0]).quantile(0.99))
+    # seconds per line by term (Synthetic: 10 fixed + 2 per case + 30 per aisle change + 0.1 per ft)
+    legs = res.legs
+    n_legs, cases_on_legs = len(legs), legs["qty"].sum()
+    assert row["s_fixed_per_line"] == pytest.approx(10 * n_legs / 3)               # 4 legs, 2 of them 0-ft repeats
+    assert row["s_per_case_per_line"] == pytest.approx(2 * cases_on_legs / 3)
+    assert row["s_cross_aisle_per_line"] == pytest.approx(30 * 1 / 3)
+    assert row["s_distance_per_line"] == pytest.approx(0.1 * legs["feet"].sum() / 3)
+    assert row["s_terms_residual_per_line"] == pytest.approx(0.0, abs=1e-9)
+    parts = sum(row[f"s_{k}_per_line"] for k in L.TERMS)
+    assert parts == pytest.approx(row["s_per_line"])
     assert row["ft_per_line"] == pytest.approx(row["feet"] / 3) and row["ft_per_pick"] == pytest.approx(row["feet"] / 5)
     assert row["s_per_line"] == pytest.approx(r["busy_s"] / 3)
+
+
+def test_terms_need_a_model_that_reports_them():
+    class Opaque:
+        name = "opaque"
+
+        def predict(self, leg):
+            return 1.0
+    legs = pd.DataFrame({"tour_id": [0], "feet": [10.0], "cross_aisle": [False], "qty": [1.0]})
+    with pytest.raises(ValueError, match="does not report its terms"):
+        L.leg_terms(legs, Opaque())

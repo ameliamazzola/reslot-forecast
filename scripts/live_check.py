@@ -1,6 +1,6 @@
 """Live-vs-replay check: feet and seconds per pick, generated vs real tours.
 
-Run:  python scripts/live_check.py [configs/sim.yaml] [--hours 8] [--policy static] [--seed N]
+Run:  python scripts/live_check.py [configs/sim.yaml] [--hours 8|full] [--policy static] [--seed N]
                                    [--layouts real synthetic] [--mode default|empirical|resample]
 
 --mode overrides generator.mode for this run only (default: the config's); the
@@ -29,7 +29,14 @@ So feet and seconds are reported per
 
 Diagnostics for the time gap, both sides: scan rows per SKU line and aisle
 changes per line and per tour (legs with cross_aisle; replay's from legs.csv
-beside tours.csv).
+beside tours.csv); seconds per line split by leg-model term -- fixed, per-case,
+cross-aisle, distance (the model's terms_frame; the terms sum to its predict(),
+so the residual is 0 when the legs were simulated by this model) -- and cases
+per SKU line, mean / median / p99 / max (live from the run, replay from lines.csv
+beside tours.csv; written by run_sim.py since 2026-11-27, n/a for older runs).
+
+--hours: the arrival cutoff, any length up to the whole window; "full" = the
+whole window. The boundary is the same at any length.
 
 Feet = the engine's pick-to-pick leg feet (tours.pick_feet), dispatch legs
 excluded; seconds = operator busy time (tours.busy_s). Both sides come from the
@@ -62,10 +69,13 @@ UNTHROTTLED = 1e9
 COUNTS = ["side", "routing", "tours", "lines", "stop_visits", "picks", "feet", "operator_hours", "drain_end_s"]
 PER_UNIT = [f"{q}_per_{u}" for u, _, _ in L.UNITS for q in ("ft", "s")]
 DIAG = ["rows_per_line", "aisle_changes", "aisle_changes_per_line", "aisle_changes_per_tour"]
+TERM_COLS = [f"s_{k}_per_line" for k in L.TERMS] + ["s_terms_residual_per_line", "s_per_line"]
+CASE_COLS = ["cases_per_line_mean", "cases_per_line_median", "cases_per_line_p99", "cases_per_line_max"]
 
 ap = argparse.ArgumentParser(description="Feet and seconds per pick: live (generated) vs replay (real).")
 ap.add_argument("config", nargs="?", default="configs/sim.yaml")
-ap.add_argument("--hours", type=float, default=8.0, help="arrival cutoff, sim hours from the window start")
+ap.add_argument("--hours", default="8", help="arrival cutoff, sim hours from the window start "
+                                             "(up to the whole window), or 'full' for the whole window")
 ap.add_argument("--policy", default="static", choices=["static", *METHODS])
 ap.add_argument("--seed", type=int)
 ap.add_argument("--layouts", nargs="+", default=["real", "synthetic"], choices=["real", "synthetic"])
@@ -74,7 +84,15 @@ args = ap.parse_args()
 
 cfg = load_config(args.config)
 start, end = E.window_bounds(cfg)
-arrival_cutoff_s = args.hours * 3600
+window_s = (end - start).total_seconds()
+if str(args.hours).lower() == "full":
+    arrival_cutoff_s = window_s
+else:
+    try:
+        arrival_cutoff_s = float(args.hours) * 3600
+    except ValueError:
+        ap.error("--hours must be a number of hours or 'full'")
+args.hours = arrival_cutoff_s / 3600
 if not math.isfinite(arrival_cutoff_s) or not 0 < arrival_cutoff_s <= (end - start).total_seconds():
     ap.error("--hours must be positive and within the configured simulation window")
 arrival_end = start + pd.Timedelta(seconds=arrival_cutoff_s)
@@ -110,7 +128,7 @@ for layout in args.layouts:
     run.start()
     run.wait()
     try:
-        rows.append(L.live_window_row(run, f"live {mode}, layout {layout}", src.routing_rule))
+        rows.append(L.live_window_row(run, f"live {mode}, layout {layout}", src.routing_rule, leg_model=leg_model))
     except ValueError as exc:
         raise SystemExit(f"not comparable: {exc}")
 
@@ -118,15 +136,16 @@ ref = Path(cfg["paths"]["out"]) / E.run_dir_name(cfg, "static", leg_model.name) 
 ref_inputs = []
 if ref.exists():
     ref_inputs = [ref]
-    ref_legs = ref.with_name("legs.csv")
+    ref_legs, ref_lines = ref.with_name("legs.csv"), ref.with_name("lines.csv")
     legs = pd.read_csv(ref_legs) if ref_legs.exists() else None
-    if legs is not None:
-        ref_inputs.append(ref_legs)
+    line_table = pd.read_csv(ref_lines) if ref_lines.exists() else None
+    ref_inputs += [f for f in (ref_legs, ref_lines) if f.exists()]
     try:
-        rows.append(L.replay_window_row(pd.read_csv(ref), arrival_cutoff_s, legs=legs))
+        rows.append(L.replay_window_row(pd.read_csv(ref), arrival_cutoff_s, legs=legs, lines=line_table,
+                                        leg_model=leg_model))
     except ValueError as exc:
         raise SystemExit(f"replay reference {ref}: {exc}")
-table = pd.DataFrame(rows, columns=COUNTS + PER_UNIT + DIAG)
+table = pd.DataFrame(rows, columns=COUNTS + PER_UNIT + DIAG + TERM_COLS[:-1] + CASE_COLS)   # s_per_line is in PER_UNIT
 
 stamp = datetime.now().strftime('%Y%m%dT%H%M%S')
 out, k = Path(cfg["paths"]["out"]) / f"live_check_{stamp}", 1
@@ -156,8 +175,19 @@ with pd.option_context("display.width", 220):
     print(per.to_string(index=False, na_rep="n/a"))
     print()
     print(table[["side"] + DIAG].round(3).to_string(index=False, na_rep="n/a"))
+    print()
+    print("seconds per SKU line by leg-model term:")
+    print(table[["side"] + TERM_COLS].round(1).to_string(index=False, na_rep="n/a"))
+    print()
+    print("cases per SKU line:")
+    print(table[["side"] + CASE_COLS].round(2).to_string(index=False, na_rep="n/a"))
 print("PRIMARY unit: SKU line (distinct SKU per tour). Pick rows are not comparable across sides: replay scans "
       "one line in several rows, the generator emits one pick per line.")
+print(f"terms: {getattr(leg_model, 'name', '?')} split as fixed + per_case x qty + cross_aisle x I + distance(feet)"
+      f" (fixed: {getattr(leg_model, 'fixed_definition', 'model-defined')}); s_terms_residual_per_line = busy "
+      "seconds the terms don't account for (0 when the legs were simulated by this model)")
+if ref.exists() and not ref.with_name("lines.csv").exists():
+    print(f"replay cases per line n/a: no lines.csv beside {ref} (rerun scripts/run_sim.py --policy static)")
 print("diagnostics: rows_per_line = scan rows per SKU line (each extra row is a 0-ft leg charged the leg model's "
       "fixed time); aisle changes = legs between aisles (charged the cross-aisle term)")
 print("feet: pick-to-pick, dispatch legs excluded; seconds: operator busy time; "
