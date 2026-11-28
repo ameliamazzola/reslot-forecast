@@ -1,0 +1,275 @@
+"""Visit order for generated tours (src/reslot/sim/routing.py), its calibration
+against real tours, and the scripts that use it. Synthetic data only."""
+import json
+import runpy
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import numpy as np
+import pandas as pd
+import pytest
+import yaml
+
+import test_generator as TG
+import test_racksmart as TR
+import test_sim as TS
+from reslot.io.wms_picks import load_wms_picks
+from reslot.sim import generator as G
+from reslot.sim import live as L
+from reslot.sim import routing as R
+from reslot.sim.workload import Pick, Tour
+from reslot.travel.artifacts import TravelNetwork
+
+SCOPE = TR.SCOPE
+AISLES = {"FF": 100.0, "GG": 200.0, "HH": 300.0}           # aisle x; D sits in front of FF
+
+
+def grid():
+    """Three aisles x five bays; bay k at y = 1000 - 100k (front = bay 0 = largest y);
+    feet = |dx| + |dy| between stop points (a test table, not network math)."""
+    pts = {"D": (100.0, 1100.0)}
+    rows = []
+    for a, x in AISLES.items():
+        for k in range(5):
+            s = f"S_{a}{k}"
+            pts[s] = (x, 1000.0 - 100 * k)
+            rows.append({"location": f"{a}{k:03d}A", "aisle": a, "zone": "WZPCK", "slot_type": "F", "status": "ok",
+                         "stop_id": s, "stop_x_in": str(x), "stop_y_in": str(1000.0 - 100 * k)})
+    ids = list(pts)
+    D = pd.DataFrame([[abs(pts[a][0] - pts[b][0]) + abs(pts[a][1] - pts[b][1]) for b in ids] for a in ids],
+                     index=pd.Index(ids, name="stop_id"), columns=ids)
+    return TravelNetwork(D, pd.DataFrame(rows))
+
+
+@pytest.fixture
+def router():
+    return R.Router(grid(), SCOPE, "D", pd.Series({"FF001A": 3, "FF004A": 1, "GG002A": 2}))
+
+
+def test_every_rule_is_a_permutation_and_keeps_a_stop_together(router):
+    locs = ["GG002A", "FF004A", "GG002A", "HH001A", "FF001A"]
+    for rule in R.RULES:
+        o = router.order(locs, rule)
+        assert sorted(o) == list(range(len(locs))), rule
+        pos = [o.index(i) for i in (0, 2)]
+        if rule != "draw":
+            assert abs(pos[0] - pos[1]) == 1, rule                         # GG002A twice: one visit
+    assert router.order(locs, "draw") == list(range(5))
+    with pytest.raises(ValueError, match="unknown routing rule"):
+        router.order(locs, "random")
+
+
+def test_aisle_serpentine_sweeps_from_dispatch_and_alternates_direction(router):
+    locs = ["GG002A", "FF004A", "HH001A", "FF001A", "GG004A"]
+    order = [locs[i] for i in router.order(locs, "aisle_serpentine")]
+    # FF (nearest dispatch) front to back, GG back to front, HH front to back
+    assert order == ["FF001A", "FF004A", "GG004A", "GG002A", "HH001A"]
+
+
+def test_nearest_neighbour_starts_at_dispatch(router):
+    locs = ["FF004A", "FF001A", "GG000A"]
+    # D->FF001 200 ft ties D->GG000 200 ft: input order wins; then GG000 (200) before FF004 (300)
+    assert [locs[i] for i in router.order(locs, "nearest_neighbour")] == ["FF001A", "GG000A", "FF004A"]
+
+
+def test_work_path_sorts_by_the_wms_path_and_puts_unknown_faces_last(router):
+    locs = ["HH003A", "FF001A", "GG002A", "FF004A"]
+    assert [locs[i] for i in router.order(locs, "work_path")] == ["FF004A", "GG002A", "FF001A", "HH003A"]
+    with pytest.raises(ValueError, match="WORK_PATH"):
+        R.Router(grid(), SCOPE, "D").order(locs, "work_path")
+
+
+def tour(tid, locs):
+    ts = pd.Timestamp("2026-09-20 08:00")
+    return Tour(tid, str(tid), "U1", 0.0, tuple(Pick(j, ts, l, 1.0, None) for j, l in enumerate(locs)), 0)
+
+
+def test_calibration_picks_the_rule_that_reproduces_the_scan_order():
+    net = grid()
+    router = R.Router(net, SCOPE, "D", pd.Series({f"{a}{k:03d}A": -i for i, (a, k) in
+                                                  enumerate((a, k) for a in AISLES for k in range(5))}))
+    # operators walk serpentine: FF front to back, then GG back to front
+    tours = [tour(i, ["FF001A", "FF004A", "GG004A", "GG002A"]) for i in range(20)] + [tour(99, ["HH002A"])]
+    res = R.calibrate(tours, router)
+    fp = res["feet_per_pick"]
+    assert res["tours"] == 20 and res["picks"] == 80                           # single-pick tours left out
+    assert res["chosen"] == "aisle_serpentine" and fp["aisle_serpentine"] == fp["actual_scan_order"]
+    assert fp["nearest_neighbour"] != fp["actual_scan_order"] and "draw" not in res["candidates"]
+    assert res["median_spearman_with_scan_order"]["aisle_serpentine"] == pytest.approx(1.0)
+    assert R.calibrate(tours, router) == res                                   # the draw baseline is seeded
+
+
+def test_resolve_rule_reads_the_calibration_and_refuses_one_past_the_run_start(tmp_path):
+    p = tmp_path / "cal.json"
+    p.write_text(json.dumps({"chosen": "work_path", "window": ["2026-09-12", "2026-10-12"], "feet_per_pick": {}}))
+    rule, info = R.resolve_rule({"rule": "calibrated", "calibration_path": str(p)}, pd.Timestamp("2026-10-12"))
+    assert rule == "work_path" and info["how"] == "calibrated"
+    with pytest.raises(ValueError, match="after the run start"):
+        R.resolve_rule({"rule": "calibrated", "calibration_path": str(p)}, pd.Timestamp("2026-10-11"))
+    with pytest.raises(ValueError, match="calibrate_routing.py"):
+        R.resolve_rule({"rule": "calibrated", "calibration_path": str(tmp_path / "none.json")})
+    with pytest.raises(ValueError, match="generator.routing.rule"):
+        R.resolve_rule({"rule": "zigzag"})
+    assert R.resolve_rule(None) == ("draw", {"rule": "draw", "how": "set in config"})
+
+
+def test_generated_tours_are_routed_once_in_the_source(tmp_path):
+    net = TravelNetwork(*TR.network())
+    p = tmp_path / "plan.csv"
+    TG.pick_rows(start=TG.PLAN_START, days=30, n_orders=900).to_csv(p, index=False)
+    prof = G.fit_profile(load_wms_picks(p, TG.FMT), SCOPE, TG.PLAN_START, TG.PLAN_END, TG.CLUSTER_CFG)
+    g = TG.gcfg(mode="empirical", orders_per_day=300, routing={"rule": "nearest_neighbour"})
+    with pytest.raises(ValueError, match="dispatch stop"):
+        G.make_generator_source(g, SCOPE, net, prof, TG.RUN_START, 1)
+    src = G.make_generator_source(g, SCOPE, net, prof, TG.RUN_START, 1, dispatch_stop="D")
+    router = R.Router(net, SCOPE, "D")
+    tours = [t for t in src.orders() if len(t.picks) > 1]
+    assert tours and src.routing_rule == "nearest_neighbour" and src.describe()["routing_rule"] == "nearest_neighbour"
+    for t in tours:                                   # already in the rule's order: routing again changes nothing
+        assert router.order([p.location for p in t.picks], "nearest_neighbour") == list(range(len(t.picks)))
+    # routing reorders picks only: the same orders and lines as without it
+    same = G.make_generator_source(g, SCOPE, net, prof, TG.RUN_START, 1, dispatch_stop="D")
+    assert [(t.order_id, sorted(p.location for p in t.picks)) for t in same.orders()] == \
+           [(t.order_id, sorted(p.location for p in t.picks)) for t in
+            G.make_generator_source({**g, "routing": {"rule": "draw"}}, SCOPE, net, prof, TG.RUN_START, 1).orders()]
+
+
+def _cfg(tmp_path):
+    D, xw = TR.network()
+    (tmp_path / "travel").mkdir()
+    D.to_csv(tmp_path / "travel" / "stop_distance_ft.csv")
+    xw.to_csv(tmp_path / "travel" / "location_stop_crosswalk.csv", index=False)
+    TG.pick_rows(start=TG.PLAN_START, days=30, n_orders=900).to_csv(tmp_path / "plan.csv", index=False)
+    cfg = yaml.safe_load((TR.REPO / "configs" / "sim.yaml").read_text())
+    cfg["travel"]["dir"] = str(tmp_path / "travel")
+    cfg["trip_ends"].update(start_stop="D", end_stop="D")
+    cfg["paths"]["out"] = str(tmp_path / "out")
+    cfg["leg_time"]["model"] = "synthetic"
+    cfg["racksmart"].update(planning_picks=[str(tmp_path / "plan.csv")], source_checks=None)
+    cfg["generator"]["routing"].update(location_master=str(TR.location_master(tmp_path)),
+                                       calibration_path=str(tmp_path / "cal" / "routing_calibration.json"))
+    return cfg
+
+
+def test_calibrate_routing_script_writes_the_choice_and_a_manifest(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    (tmp_path / "sim.yaml").write_text(yaml.safe_dump(cfg))
+    monkeypatch.setattr(sys, "argv", ["calibrate_routing.py", str(tmp_path / "sim.yaml")])
+    runpy.run_path(str(TR.REPO / "scripts" / "calibrate_routing.py"), run_name="__main__")
+    res = json.loads((tmp_path / "cal" / "routing_calibration.json").read_text())
+    assert res["chosen"] in R.CANDIDATES and res["window"] == ["2026-09-12 00:00:00", "2026-10-12 00:00:00"]
+    assert res["tours"] > 0 and set(res["feet_per_pick"]) == {"actual_scan_order", *R.RULES}
+    m = json.loads((tmp_path / "cal" / "manifest.json").read_text())
+    assert m["routing_calibration"]["chosen"] == res["chosen"] and "2026-10-12" in m["lookahead"]
+    assert R.resolve_rule(cfg["generator"]["routing"], pd.Timestamp("2026-10-12"))[0] == res["chosen"]
+    # per SKU line, under each rule and the actual scan order
+    assert res["lines"] > 0 and res["rows_per_line"] == pytest.approx(res["picks"] / res["lines"])
+    for k in ("feet_per_line", "aisle_changes_per_line"):
+        assert set(res[k]) == {"actual_scan_order", *R.RULES} and all(v >= 0 for v in res[k].values())
+
+
+def test_live_check_reports_feet_and_seconds_per_pick_for_both_layouts(tmp_path, monkeypatch):
+    from reslot.sim import engine as E
+    from reslot.sim.racksmart import face_items
+    cfg = _cfg(tmp_path)
+    ev = load_wms_picks(tmp_path / "plan.csv", TG.FMT)
+    prof = G.fit_profile(ev, SCOPE, TG.PLAN_START, TG.PLAN_END, TG.CLUSTER_CFG)
+    prof["face_items"] = {str(k): str(v) for k, v in face_items(ev, SCOPE, TG.PLAN_END).items()}
+    (tmp_path / "profile.json").write_text(json.dumps(prof))
+    cfg["generator"].update(profile_path=str(tmp_path / "profile.json"), orders_per_day=300)
+    cfg["generator"]["routing"]["rule"] = "nearest_neighbour"
+    (tmp_path / "sim.yaml").write_text(yaml.safe_dump(cfg))
+    monkeypatch.setitem(E.LEG_TIME_MODELS, "synthetic", TS.Synthetic)
+    # the static replay reference: one tour released before the 4 h cutoff that ends after
+    # it (counted whole), one released exactly at the cutoff and one after (not counted)
+    ref = tmp_path / "out" / E.run_dir_name(cfg, "static", "synthetic")
+    ref.mkdir(parents=True)
+    cut = 4 * 3600
+    old = pd.DataFrame({"tour_id": [0, 1, 2, 3], "arrival_s": [cut - 100, cut - 50, cut, cut + 10],
+                        "end_s": [cut + 500, cut - 10, cut + 60, cut + 90], "n_picks": [5, 2, 3, 4],
+                        "pick_feet": [400.0, 30.0, 70.0, 90.0], "busy_s": [600.0, 40.0, 60.0, 80.0]})
+    old.to_csv(ref / "tours.csv", index=False)                       # written before SKU lines existed
+    monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "4"])
+    with pytest.raises(SystemExit, match="rerun scripts/run_sim.py"):
+        runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
+    old.assign(n_lines=[4, 1, 3, 4], n_stop_visits=[3, 1, 2, 4]).to_csv(ref / "tours.csv", index=False)
+    # its legs.csv: tour 0 changes aisle twice, tour 1 once; tours 2 and 3 (not counted) three times
+    pd.DataFrame({"tour_id": [0, 0, 0, 0, 1, 2, 2, 3], "leg": [1, 2, 3, 4, 1, 1, 2, 1],
+                  "cross_aisle": [True, False, True, False, True, True, True, True],
+                  "feet": [100.0, 0.0, 200.0, 100.0, 30.0, 50.0, 20.0, 90.0],
+                  "qty": [2.0, 1.0, 1.0, 4.0, 3.0, 1.0, 1.0, 1.0]}).to_csv(ref / "legs.csv", index=False)
+    # its lines.csv: cases per SKU line of tours 0 and 1 (tours 2 and 3 not counted)
+    pd.DataFrame({"tour_id": [0, 0, 0, 0, 1, 2, 3], "item_id": ["a", "b", "c", "d", "e", "f", "g"],
+                  "rows": [2, 1, 1, 1, 2, 3, 4], "cases": [3.0, 1.0, 1.0, 4.0, 5.0, 9.0, 99.0]}
+                 ).to_csv(ref / "lines.csv", index=False)
+    runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
+    m = json.loads(next((tmp_path / "out").glob("live_check_*/manifest.json")).read_text())
+    rows = {r["side"]: r for r in m["rows"]}
+    # the config's mode (resample, the live default) labels the rows
+    assert set(rows) == {"live resample, layout real", "live resample, layout synthetic", "replay static"}
+    assert m["citable"] is False and m["generator_mode"] == "resample"
+    assert m["generator_mode_label"].startswith("resample")
+    assert m["boundary_rule"].startswith("tours released 2026-10-12 00:00-04:00 (end exclusive), each run to completion")
+    for side in ("live resample, layout real", "live resample, layout synthetic"):
+        r = rows[side]
+        assert r["routing"] == "nearest_neighbour" and r["picks"] > 0 and r["ft_per_pick"] > 0 and r["s_per_pick"] > 0
+        assert r["operator_hours"] == pytest.approx(r["s_per_pick"] * r["picks"] / 3600)
+    rp = rows["replay static"]
+    assert (rp["tours"], rp["picks"], rp["feet"]) == (2, 7, 430.0)                  # tours 0 and 1, whole
+    assert (rp["lines"], rp["stop_visits"]) == (5, 4)
+    assert rp["ft_per_line"] == pytest.approx(430 / 5) and rp["s_per_line"] == pytest.approx(640 / 5)
+    assert rp["ft_per_visit"] == pytest.approx(430 / 4) and rp["ft_per_tour"] == pytest.approx(430 / 2)
+    assert m["primary_unit"] == "SKU line" and "PRIMARY" in m["units"]["line"]
+    # diagnostics: scan rows per line and aisle changes, replay's from its legs.csv
+    assert rp["rows_per_line"] == pytest.approx(7 / 5) and rp["aisle_changes"] == 3
+    # cases per line from lines.csv; seconds per line by term (Synthetic, tours 0 and 1's five legs)
+    assert (rp["cases_per_line_mean"], rp["cases_per_line_median"], rp["cases_per_line_max"]) == (2.8, 3.0, 5.0)
+    assert rp["s_fixed_per_line"] == pytest.approx(10 * 5 / 5)
+    assert rp["s_per_case_per_line"] == pytest.approx(2 * 11 / 5)
+    assert rp["s_cross_aisle_per_line"] == pytest.approx(30 * 3 / 5)
+    assert rp["s_distance_per_line"] == pytest.approx(0.1 * 430 / 5)
+    # the fake legs don't add up to the fake busy seconds: the residual says so
+    assert rp["s_terms_residual_per_line"] == pytest.approx((640 - (50 + 22 + 90 + 43)) / 5)
+    assert rp["aisle_changes_per_line"] == pytest.approx(3 / 5) and rp["aisle_changes_per_tour"] == pytest.approx(1.5)
+    for side in ("live resample, layout real", "live resample, layout synthetic"):
+        r = rows[side]
+        assert r["rows_per_line"] == 1 and r["aisle_changes"] is not None and r["aisle_changes"] >= 0
+        assert r["s_terms_residual_per_line"] == pytest.approx(0.0, abs=1e-6)      # simulated by this model
+        assert sum(r[f"s_{k}_per_line"] for k in L.TERMS) == pytest.approx(r["s_per_line"])
+        assert r["cases_per_line_max"] >= r["cases_per_line_p99"] >= r["cases_per_line_median"] >= 1
+    for r in rows.values():                                       # generated orders: one pick per SKU line
+        if r["side"].startswith("live"):
+            assert r["lines"] == r["picks"] and r["ft_per_line"] == pytest.approx(r["ft_per_pick"])
+
+    # --mode overrides generator.mode for this run only, and labels it
+    monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "4",
+                                      "--mode", "empirical", "--layouts", "real"])
+    runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
+    found = [json.loads(q.read_text()) for q in (tmp_path / "out").glob("live_check_*/manifest.json")]
+    assert len(found) == 2                                            # the first run's manifest is kept
+    (m2,) = [x for x in found if x["generator_mode"] == "empirical"]
+    assert m2["generator_mode_label"].startswith("empirical")
+    rows2 = {r["side"]: r for r in m2["rows"]}
+    assert set(rows2) == {"live empirical, layout real", "replay static"}
+    assert rows2["live empirical, layout real"]["tours"] > 0 and rows2["replay static"] == rp
+    assert yaml.safe_load((tmp_path / "sim.yaml").read_text())["generator"]["mode"] == "resample"
+
+    # --hours full: the whole window, same boundary (every replay tour here was released in it)
+    monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "full",
+                                      "--layouts", "real"])
+    runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
+    found = [json.loads(q.read_text()) for q in (tmp_path / "out").glob("live_check_*/manifest.json")]
+    (m3,) = [x for x in found if x["hours"] == 28 * 24]
+    assert m3["arrival_window"]["end_exclusive"] == "2026-11-09 00:00:00"
+    assert m3["boundary_rule"].startswith("tours released 2026-10-12 00:00 to 2026-11-09 00:00 (end exclusive)")
+    rows3 = {r["side"]: r for r in m3["rows"]}
+    assert rows3["replay static"]["tours"] == 4 and rows3["live resample, layout real"]["tours"] > \
+        rows["live resample, layout real"]["tours"]
+    monkeypatch.setattr(sys, "argv", ["live_check.py", str(tmp_path / "sim.yaml"), "--hours", "673"])
+    with pytest.raises(SystemExit):                                   # past the window: refused
+        runpy.run_path(str(TR.REPO / "scripts" / "live_check.py"), run_name="__main__")
+    assert rp["operator_hours"] == pytest.approx(640 / 3600) and rp["drain_end_s"] == cut + 500
+    assert rp["ft_per_pick"] == pytest.approx(430 / 7) and rp["s_per_pick"] == pytest.approx(640 / 7)

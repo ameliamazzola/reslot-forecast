@@ -1,0 +1,226 @@
+# Simulation run (scripts/run_sim.py). Every knob that changes a result lives here.
+# Decisions: docs/decisions.md, 2026-11-02 entries.
+seed: 20261005             # recorded in the manifest; the static run draws no random numbers
+
+window:                    # inclusive days: four full weeks Mon Oct 12 - Sun Nov 8 from the
+  start: "2026-10-12"      # Oct 10 noon - Nov 9 noon transactions export; its partial first and
+  end: "2026-11-08"        # last days are left out. Plan applied on Oct 12 (decisions 2026-11-19).
+
+operators: 6               # reference: median distinct case pickers per clock hour, Oct 5-11
+                           # (p90 9, max 12); swept later. Not a finding while dispatch legs are untimed.
+                           # Measured on Oct 5-11. For this window: scripts/operators_per_hour.py.
+headline:                  # the primary result (src/reslot/sim/headline.py; decisions 2026-11-19)
+  # net labor savings = operator-hours saved vs static x W - move cost;
+  # payback days = move cost / (hours saved x W / window days)
+  labor_rate_usd_per_hour: 45.50     # W
+  labor_rate_source: >-
+    WAGE in the settings cell of notebooks/RackSmart_final.ipynb ($45.50/h), the rate the
+    notebook's own scoring uses. Its origin (loaded vs base wage, C&D or assumed) is not
+    documented in this repo; confirm before citing dollar figures.
+
+policy: static             # static = no re-slots; notebook methods (planned once, before the week,
+                           # from the racksmart: block): racksmart | classic_abc | abc_cost_test | family_grouping
+
+data:
+  # Converted transactions export (scripts/xlsx_convert.py output): pick-report
+  # columns plus TRANS_TYPE, read by io/wms_picks.load_wms_picks. Run on the real
+  # week by the team; development and tests use synthetic data only.
+  picks_path: "data/raw/Transactions 11-9-2026 thur 10-10.2026.csv"   # Oct 10 noon - Nov 9 noon
+  ts_format: "%m/%d/%Y %I:%M:%S %p"
+
+scope:                     # v1 workload: case picks only; pallet picks (PL) are out of scope
+  event_class: pick
+  zone: WZPCK
+  uom: CS
+  slot_type: F             # location master TYPE: F = pick face, R = reserve
+
+tour:
+  group_keys: [order_id, user_id]   # one operator working one order; every tour is simulated
+
+leg_time:
+  # Pluggable: the engine calls LegTimeModel.predict(leg) -> seconds and nothing else.
+  # network_feet = the 2026-09-14 model refit on network feet (scripts/refit_travel_feet.py,
+  # branch travel/refit-feet). It loads ONLY if that run's 2026-11-02 review outcome is
+  # "adopted" and it was fitted on this travel network; otherwise run_sim.py refuses.
+  model: network_feet
+  calibration_manifest: runs/travel_ft_seed20260914/manifest.json   # coefficients + review outcome
+  cost_table: data/processed/travel/travel_cost_ft.csv              # fitted distance curve
+
+travel:
+  dir: data/processed/travel           # build_travel_network.py outputs: stop_distance_ft.csv,
+                                       # location_stop_crosswalk.csv
+
+trip_ends:                 # 2026-11-02 dispatch-legs entry; v1 accepts only these values
+  start_stop: D_183183.9_5933.3        # Stop_Dispatch
+  end_stop: D_183183.9_5933.3          # back to dispatch: case picks can't be tied to a lane
+  dispatch_legs: untimed               # feet only; operator busy from first to last pick scan
+  drop_off_mode: provisional
+
+leg_model_check:
+  # Out-of-time check of the leg model on this window -- NOT a sim validation.
+  # Primary: simulated vs observed pick-to-pick leg seconds (first/last legs excluded).
+  # Secondary: first-to-last scan span, measured the same way on both sides.
+  # These filters apply to the check's statistics only, never to what is simulated,
+  # and match the calibration's (configs/travel.yaml trip.min_picks, legs.*_seconds).
+  min_picks: 3
+  leg_min_seconds: 1
+  leg_max_seconds: 900
+
+racksmart:
+  # Planning inputs shared by every notebook method (policy: racksmart, classic_abc,
+  # abc_cost_test, family_grouping) and scripts/plan_policies.py. The algorithms and their
+  # cost model (WAGE, MPH, COST_PER_CASE) and tuned SETTINGS are the notebook's, run
+  # unchanged; nothing here re-tunes them. The paths below replace the notebook's file
+  # settings (CLUSTERS, RACK_HEIGHTS, CASES_PER_PALLET, REFILL_ORIGIN).
+  notebook: notebooks/RackSmart_final.ipynb
+  planning_window:                     # the 30 days before the run start Oct 12 (inclusive days)
+    start: "2026-09-12"
+    end: "2026-10-11"
+  # Every export that covers part of the planning window: the 365-day pick reports (to
+  # Sep 21), the Sep 15 - Oct 15 transactions export and the Oct 10 noon - Nov 9 noon one.
+  # Each entry is a path, or {path, ts_format} for a file in another timestamp format.
+  # Only [planning start - 1 day, planning end) is read; rows that are one transaction
+  # seen in two exports are dropped (sources.DEDUP_KEY), which source_checks verifies.
+  planning_picks:
+    - data/raw/yowmspd2__picks_past_365days_ranon9.21.26.csv
+    - data/raw/yowmspd2_archive_picks_past_365days_ranon9.21.26.csv
+    - data/raw/transactions_0915_1015.csv
+    - "data/raw/Transactions 11-9-2026 thur 10-10.2026.csv"
+  planning_ts_format: "%m/%d/%Y %I:%M:%S %p"
+  # Refuse to plan unless the exports agree where they overlap (src/reslot/sim/sources.py).
+  # Compared: raw case-pick legs (consecutive WZPCK/CS picks of one order x operator,
+  # both picks in the window), matched on (order, operator, leg number, both locations).
+  # Tolerance, fixed before looking at the overlaps (proposed 2026-11-19):
+  #   count_rel             leg counts differ by at most 0.1%
+  #   matched_share         at least 99.9% of each side's legs are found on the other
+  #   seconds / within_...  at least 99.9% of matched legs agree within 1 s (exports of one
+  #                         WMS table should be exact; 1 s allows seconds rounding in a
+  #                         conversion, e.g. the xlsx -> csv step)
+  #   same_event_id_share   at least 99.9% of matched legs carry the same transaction numbers
+  #                         (NO): deduplication relies on it
+  #   min_cover             the span both sides hold (first to last row) must be at least 80% of
+  #                         the configured span: catches a truncated export (Oct 10 noon - Oct 11:
+  #                         >= 28.8 of the 36 hours)
+  # The deduplicated union of both sides must give the same legs as side a, same tolerance.
+  # Both overlaps end at or before the planning end (Oct 12): planning reads nothing at or
+  # after the run start, not even to compare exports.
+  source_checks:
+    tolerance: {count_rel: 0.001, matched_share: 0.999, seconds: 1, within_seconds_share: 0.999,
+                same_event_id_share: 0.999, min_cover: 0.8}
+    overlaps:
+      - name: 365day_vs_sep_oct
+        a: [data/raw/yowmspd2__picks_past_365days_ranon9.21.26.csv,
+            data/raw/yowmspd2_archive_picks_past_365days_ranon9.21.26.csv]
+        b: [data/raw/transactions_0915_1015.csv]
+        start: "2026-09-15 00:00"      # Sep 15 - 20, inclusive days
+        end: "2026-09-21 00:00"
+      - name: sep_oct_vs_oct_nov
+        a: [data/raw/transactions_0915_1015.csv]
+        b: ["data/raw/Transactions 11-9-2026 thur 10-10.2026.csv"]
+        start: "2026-10-10 12:00"      # the newer export starts at noon
+        end: "2026-10-12 00:00"        # through Oct 11: nothing at or after the run start
+  # Case counts at each face (the notebook's move cost and its tie-breaks):
+  #   inventory_snapshot  the on-hand snapshot below. Taken AFTER the run start, so it is
+  #                       a named lookahead exception (lookahead_exceptions.move_cases).
+  #   pallet_fill         snapshot-free sensitivity: cases per pallet of the face's item
+  #                       (median CASES_PER_PALLET in planning picks) x face_fill.
+  #                       run_sim.py --move-cases pallet_fill; run_all.py --sensitivity.
+  move_cases: inventory_snapshot
+  inventory_path: "data/raw/York Inventory On Hand 10.20.26 1PM_EST 1.csv"
+  inventory_as_of: "2026-10-20 13:00"  # the snapshot's time; the lookahead check compares it
+  pallet_fill:
+    face_fill: 0.75                    # share of a pallet on the face (assumed, not measured)
+    cases_per_pallet: null             # default when a face has no item / no pallet size;
+                                       # null = median over the faces' items
+  # Affinity clusters. Must have sku_clusters_meta.json beside it (written by
+  # src/affinity/affinity_graph.py) with a data cutoff at or before the run start.
+  clusters_path: data/processed/sku_clusters.csv                             # null = no clusters
+  # RackSmart's swap groups (the notebook's RACK_HEIGHTS rule, SHORT/TALL), derived from the
+  # location master's putaway zone: PY.. = TALL, PZ.. = SHORT. Structural input (same file
+  # as configs/travel.yaml locations_path). null = aisle fence only, PY/PZ not enforced.
+  # The comparison methods use no swap groups either way.
+  rack_heights:
+    location_master: data/raw/yowmspd2_locations_9.14.26.csv
+  # RackSmart's refill-trip cost (notebook SETTINGS refill=True). OFF until the refill files'
+  # date range is confirmed (team decision 2026-11-18); every RackSmart manifest records that
+  # this differs from the notebook's tuned run. as_of = the last date of the data the files
+  # were derived from; required when on, and checked against the run start like any input.
+  refill:
+    cases_per_pallet_path: null        # item, cases_per_pallet
+    origin_path: null                  # item, origin_location ("__default__" row = fallback)
+    as_of: null
+
+# Planning inputs allowed to end after the run start, by name, with the reason.
+# The engine refuses any other planning input that ends after the run start, and
+# every manifest records which of these a run actually used.
+lookahead_exceptions:
+  move_cases: >-
+    case counts per face come from the 2026-10-20 on-hand snapshot, 8 days after the Oct 12 run
+    start. No snapshot from before the run start exists; a newer one exists but is further from
+    the run start, so the Oct 20 one is kept. It prices moves and breaks ties, it does not choose
+    faces. Sensitivity: move_cases: pallet_fill (run_all.py --sensitivity).
+
+generator:
+  # Live mode's order source: the team's OrderGenerator (src/reslot/orders.py) behind
+  # GeneratorSource (src/reslot/sim/orders.py). Never citable (mode: live).
+  #   empirical  lines per order and cases per line drawn from the profile's
+  #              planning-window histograms; arrivals every minute at orders_per_day x 7 x
+  #              weekday share x hour share / 60 (src/reslot/sim/generator.py)
+  #   resample   (live default) whole real orders (SKU set and cases per line) drawn, seeded, from the planning
+  #              window's order library in the profile, on the same arrival profile as empirical
+  #   default    "team generator as written (06:00 + 960 min shift)": OrderGenerator with the
+  #              `default` parameters below, orders only during each day's shift
+  mode: resample                    # live default since 2026-11-25 (8 h live check, real layout)
+  hour_profile: split               # empirical, resample: split = weekday and weekend hour-of-day shares (agreed fix
+                                    # for the weekend score, 2026-11-19); single = one profile (first version)
+  profile_path: data/processed/generator/profile_20260912_20261011/profile.json   # fit_generator_profile.py
+  seed: 20261119
+  orders_per_day: null              # null = the profile's (planning-window orders per day)
+  affinity: 0.5                     # the generator's same-cluster draw probability; live control
+  sku_to_face: synthetic            # synthetic = seeded random layout on the usable faces
+                                    # real = last item picked at each face before the run start
+  layout_seed: 20261119             # synthetic layout only
+  routing:                          # visit order of each generated tour (src/reslot/sim/routing.py),
+    rule: calibrated                # set once in the source, the same under every policy.
+                                    # calibrated = the rule calibrate_routing.py found closest to real
+                                    # tours' scan order (planning window); or draw | work_path |
+                                    # aisle_serpentine | nearest_neighbour
+    calibration_path: data/processed/generator/routing_calibration/routing_calibration.json
+    location_master: data/raw/yowmspd2_locations_9.14.26.csv   # WORK_PATH for the work_path rule
+  default:                          # OrderGenerator's own defaults, used in mode: default
+    shift_start_hour: 6
+    shift_minutes: 960
+    lines_per_order_mean: 6.0
+    min_lines: 3
+    max_lines: 25
+    cases_per_line_mean: 2.0
+  exclude:                          # left out of the profile, its clusters, and the real side of
+    vms_zone: WZVMS                 # compare_generator.py: the affinity pipeline's filter
+    vms_keep_pattern: ARRID         # (src/affinity/build_matrix.py steps 1 and 1b) -- SKUs picked
+    vitamin_pattern: "VITFUS|CRITTER"   # in WZVMS unless ARRID; discontinued vitamin brands anywhere
+  clusters:                         # fitted on the planning window by fit_generator_profile.py;
+    min_support: 0.005              # the affinity pipeline's settings (decisions, Oct 2026)
+    min_jaccard: 0.10
+    resolution: 1.0
+    seed: 42
+  compare:                          # scripts/compare_generator.py
+    bins: {orders_per_hour: 5, lines_cap: 30, cases_cap: 50}
+    noise_floor: {seed_pairs: 5, seed_base: 1000}   # generator vs itself, reported beside each threshold
+    thresholds:                     # max TVD to pass, set 2026-11-19 before any run
+      orders_per_hour: 0.15
+      orders_per_hour_weekday: 0.15
+      orders_per_hour_weekend: 0.15
+      lines_per_order: 0.10
+      cases_per_line: 0.10
+      share_1_2_line_orders: 0.05
+      sku_concentration: 0.10
+
+live:                               # scripts/run_live.py; never citable (mode: live)
+  host: 127.0.0.1                   # the only host accepted
+  port: 8765
+  speed: 60                         # sim seconds per wall second at the start
+  speeds: [1, 10, 60, 600]          # the speeds POST /control accepts
+  max_events_per_second: 4          # wall clock, whatever the speed
+
+paths:
+  out: data/processed/sim       # every sim output (replay and live); gitignored, C&D-derived

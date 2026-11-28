@@ -127,9 +127,65 @@ def test_wms_picks_keeps_string_ids(raw_picks_csv):
     assert "00123" in set(ev["item_id"])
 
 
+def test_wms_picks_can_read_one_window_only(raw_picks_csv):
+    """The three rows are Aug 16 (x2) and Aug 31; a window around Aug 31 keeps one."""
+    ev = load_wms_picks(raw_picks_csv, window=(pd.Timestamp("2026-08-20"), pd.Timestamp("2026-09-20")))
+    assert len(ev) == 1 and ev.loc[0, "from_loc"] == "JJ119E"
+    validate(ev, EVENTS, "events", strict=False)
+
+
+def test_wms_picks_window_with_no_rows_gives_an_empty_table(raw_picks_csv):
+    """One of the 365-day files can have nothing in the planning month."""
+    ev = load_wms_picks(raw_picks_csv, window=(pd.Timestamp("2026-10-01"), pd.Timestamp("2026-11-01")))
+    assert len(ev) == 0 and {"from_aisle", "from_bay", "from_level", "type_code"} <= set(ev.columns)
+
+
 def test_wms_picks_rejects_wrong_ts_format(raw_picks_csv):
     with pytest.raises(ValueError, match="did not parse"):
         load_wms_picks(raw_picks_csv, ts_format="%Y-%m-%d %H:%M:%S")
+
+
+@pytest.fixture
+def raw_transactions_csv(tmp_path):
+    """transactions_0915_1015 layout: pick-report columns plus TRANS_TYPE,
+    with TYPE as an unpadded group code. Synthetic rows only."""
+    names = ["PICK", "DROPOFF-CP", "DROPOFF-FP", "HIVE_PUTAWAY", "INBOUND_PUTAWAY",
+             "REPLENISHMENT", "STARTREPLEN", "", "NEW_THING"]
+    codes = ["9", "40", "40", "8", "8", "0", "0", "009", "0"]
+    n = len(names)
+    p = tmp_path / "transactions.csv"
+    pd.DataFrame({
+        "NO": range(1, n + 1), "TYPE": codes, "TRANS_TYPE": names,
+        "CREATE_DT": [f"09/{15 + i:02d}/2026 0{i % 9 + 1}:00:00 PM" for i in range(n)],
+        "USER_NAME": ["U1"] * n, "FROM_ITEM": ["20000100"] * n, "FROM_DESCR": ["a"] * n,
+        "FROM_LOCATION": ["FF002A"] * n, "TO_LOCATION": ["V-0001"] * n,
+        "FROM_QTY": [1] * n, "FROM_UOM": ["CS"] * n, "TO_QTY": [1] * n, "TO_UOM": ["CS"] * n,
+        "CASES_PER_PALLET": [60] * n, "ORD_NO": ["8006855902"] * n, "CUST_NAME": ["X"] * n,
+        "FROM_FIFO_DT": ["07/29/2026 12:00:00 AM"] * n,
+        "FROM_ZONE": ["WZPCK"] * n, "TO_ZONE": ["WZEQP"] * n,
+    }).to_csv(p, index=False)
+    return p
+
+
+def test_transactions_export_classes_from_trans_type(raw_transactions_csv):
+    """TRANS_TYPE decides event_class; TYPE is kept untouched in type_code.
+    On TYPE alone this export's picks ('9', not '009') would all be 'other'."""
+    with pytest.warns(UserWarning, match="NEW_THING"):
+        ev = load_wms_picks(raw_transactions_csv)
+    validate(ev, EVENTS, "events", strict=False)
+    got = dict(zip(ev["event_id"], zip(ev["transaction_type"], ev["type_code"], ev["event_class"])))
+    assert got[1] == ("PICK", "9", "pick")
+    assert got[2] == ("DROPOFF-CP", "40", "putaway")        # OneTrack taxonomy
+    assert got[3][2] == "putaway" and got[4][2] == "putaway" and got[5][2] == "putaway"
+    assert got[6] == ("REPLENISHMENT", "0", "replen") and got[7][2] == "replen"
+    assert pd.isna(got[8][0]) and got[8][1:] == ("009", "pick")   # blank name -> falls back to TYPE
+    assert got[9] == ("NEW_THING", "0", "other")
+
+
+def test_pick_report_without_trans_type_is_unchanged(raw_picks_csv):
+    ev = load_wms_picks(raw_picks_csv)
+    assert (ev["transaction_type"] == "009").all() and (ev["type_code"] == "009").all()
+    assert (ev["event_class"] == "pick").all()
 
 
 def test_locations_contract_and_aisle(raw_locations_csv):

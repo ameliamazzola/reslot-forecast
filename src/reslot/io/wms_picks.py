@@ -18,6 +18,17 @@ What this extract does NOT have, and what that means:
     master once one exists.
   - ORD_LINE_NO, LIC, LOAD_ID, lot, warehouse: null.
   - CUST_NO: only CUST_NAME, mapped to customer_id.
+
+The yowmspd2 transactions export (transactions_0915_1015.csv) uses the same
+columns plus TRANS_TYPE, the transaction name (PICK, DROPOFF-CP, DROPOFF-FP,
+HIVE_PUTAWAY, INBOUND_PUTAWAY, REPLENISHMENT, STARTREPLEN). There TYPE is a
+numeric group code (9 pick, 40 dropoff, 8 putaway, 0 replen/misc), not the
+pick report's zero-padded "009". When TRANS_TYPE is present:
+  - event_class comes from TRANS_TYPE, using the OneTrack taxonomy (same names,
+    same classes) plus PICK -> pick. A row with a blank TRANS_TYPE falls back
+    to its TYPE.
+  - transaction_type holds TRANS_TYPE.
+Either way, TYPE is kept as-is in type_code (string, never re-padded).
 """
 
 from __future__ import annotations
@@ -28,9 +39,16 @@ from pathlib import Path
 import pandas as pd
 
 from ..schemas import EVENTS, validate
+from .onetrack import EVENT_CLASS as ONETRACK_EVENT_CLASS
 from .onetrack import parse_location
 
-EVENT_CLASS = {"009": "pick"}
+EVENT_CLASS = {"009": "pick"}                      # pick report TYPE codes
+
+# Transactions export TRANS_TYPE names. Same names as OneTrack's
+# TRANSACTION_TYPE, so one taxonomy covers both (note OneTrack files
+# DROPOFF-CP / DROPOFF-FP under "putaway"; the raw name stays in
+# transaction_type to tell them apart).
+TRANS_EVENT_CLASS = {**ONETRACK_EVENT_CLASS, "PICK": "pick"}
 
 RENAME = {
     "NO": "event_id",
@@ -51,14 +69,19 @@ RENAME = {
 # Read as strings. ORD_NO carries alpha suffixes on ~0.8% of rows
 # (10906764CR, 10905011LR -- likely credits/returns, unconfirmed), and TYPE is
 # zero-padded. Numeric inference mangles both.
-STRING_COLS = ["TYPE", "USER_NAME", "FROM_ITEM", "FROM_LOCATION", "TO_LOCATION",
-               "ORD_NO", "CUST_NAME", "FROM_ZONE", "TO_ZONE", "FROM_UOM"]
+STRING_COLS = ["TYPE", "TRANS_TYPE", "USER_NAME", "FROM_ITEM", "FROM_LOCATION", "TO_LOCATION",
+               "ORD_NO", "CUST_NAME", "FROM_ZONE", "TO_ZONE", "FROM_UOM", "FROM_DESCR"]
 
 DEFAULT_TS_FORMAT = "%m/%d/%Y %I:%M:%S %p"
 
 
-def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT) -> pd.DataFrame:
-    """Read a yowmspd2 pick report and return canonical EVENTS."""
+def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT, window=None) -> pd.DataFrame:
+    """Read a yowmspd2 pick report or transactions export and return
+    canonical EVENTS, plus type_code (raw TYPE).
+
+    window: optional (start, end) timestamps. Rows outside [start, end) are dropped
+    right after the timestamps are parsed, before the per-row work -- for reading
+    one month out of the 365-day pick reports."""
     path = Path(path)
     if path.suffix.lower() == ".parquet":
         raw = pd.read_parquet(path)
@@ -75,16 +98,40 @@ def load_wms_picks(path: str | Path, ts_format: str = DEFAULT_TS_FORMAT) -> pd.D
     if bad:
         raise ValueError(f"{bad} timestamps did not parse as {ts_format!r}")
     df["ts"] = ts
+    if window is not None:
+        df = df[(df["ts"] >= window[0]) & (df["ts"] < window[1])].reset_index(drop=True)
 
-    df["event_class"] = df["transaction_type"].map(EVENT_CLASS).fillna("other")
-    unmapped = sorted(set(df.loc[df["event_class"] == "other", "transaction_type"].dropna()))
+    type_code = df["transaction_type"].astype("string")      # raw TYPE, kept as-is
+    by_code = type_code.astype(object).map(EVENT_CLASS)
+    if "TRANS_TYPE" in df:
+        name = df["TRANS_TYPE"].astype("string").str.strip().replace("", pd.NA)
+        by_name = name.astype(object).map(TRANS_EVENT_CLASS)
+        no_name = name.isna()
+        df["event_class"] = by_name.where(~no_name, by_code).fillna("other")
+        df["transaction_type"] = name
+        unmapped = set(name[~no_name & by_name.isna()]) | set(type_code[no_name & by_code.isna()].dropna())
+    else:
+        df["event_class"] = by_code.fillna("other")
+        unmapped = set(type_code[by_code.isna()].dropna())
     if unmapped:
-        warnings.warn(f"Unmapped transaction types -> 'other': {unmapped}", stacklevel=2)
+        warnings.warn(f"Unmapped transaction types -> 'other': {sorted(unmapped)}", stacklevel=2)
 
     events = validate(df, EVENTS, "events[wms_picks]", strict=False)
     events = events[list(EVENTS)]
+    events["type_code"] = type_code
+    # Pick reports carry CASES_PER_PALLET per row (item's pallet size); kept for the
+    # snapshot-free move cost. Absent in some exports -> NaN.
+    events["cases_per_pallet"] = (pd.to_numeric(df["CASES_PER_PALLET"], errors="coerce")
+                                  if "CASES_PER_PALLET" in df else float("nan"))
+    # Item description, for the affinity pipeline's VMS / vitamin-brand filter. Absent -> NA.
+    events["item_descr"] = (df["FROM_DESCR"].astype("string") if "FROM_DESCR" in df
+                            else pd.Series(pd.NA, index=df.index, dtype="string"))
 
-    locs = events["from_loc"].apply(parse_location).apply(pd.Series)
-    events[["from_aisle", "from_bay", "from_level"]] = locs[["aisle", "bay", "level"]]
+    if len(events):
+        locs = events["from_loc"].apply(parse_location).apply(pd.Series)
+        events[["from_aisle", "from_bay", "from_level"]] = locs[["aisle", "bay", "level"]]
+    else:                         # e.g. a window with no rows in this file
+        for c in ("from_aisle", "from_bay", "from_level"):
+            events[c] = pd.Series(dtype=object)
 
     return events.sort_values("ts").reset_index(drop=True)

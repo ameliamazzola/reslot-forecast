@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RackSmart simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: light;
+  --bg:#E4E7E6; --panel:#F5F6F5; --panel2:#ECEEED; --ink:#1B2126; --muted:#5A646C; --line:#C6CBCC;
+  --rack:#2A5592; --tape:#E3A814; --good:#2D7A4E; --bad:#B23E2C;
+  --heat0:#D3DBE2; --heat1:#5F8DB8; --heat2:#E3A814; --heat3:#BF3A28; --empty:#D9DDDF;
+  --floor:#DCDFDE;
+  --display:"Barlow Semi Condensed","Arial Narrow",Arial,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --bg:#15181B; --panel:#1E2226; --panel2:#252A2F; --ink:#E5E8EA; --muted:#97A1A9; --line:#343B42;
+    --rack:#6E95D2; --tape:#F0BE36; --good:#5DBB86; --bad:#E06A55;
+    --heat0:#2A333C; --heat1:#3F6C99; --heat2:#E0AE2A; --heat3:#E0563F; --empty:#262C31; --floor:#1A1E21;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#15181B; --panel:#1E2226; --panel2:#252A2F; --ink:#E5E8EA; --muted:#97A1A9; --line:#343B42;
+  --rack:#6E95D2; --tape:#F0BE36; --good:#5DBB86; --bad:#E06A55;
+  --heat0:#2A333C; --heat1:#3F6C99; --heat2:#E0AE2A; --heat3:#E0563F; --empty:#262C31; --floor:#1A1E21;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 var(--body);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1440px;margin:0 auto;padding:20px clamp(12px,2.5vw,28px) 32px}
+header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px;margin-bottom:18px}
+h1{font:700 clamp(28px,3.4vw,40px)/1 var(--display);margin:0}
+.sub{color:var(--muted);margin:6px 0 0;font-size:14px;max-width:70ch}
+.tape{height:6px;margin:0 0 18px;border-radius:2px;background:repeating-linear-gradient(-45deg,var(--tape) 0 14px,var(--ink) 14px 28px);opacity:.9}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{font:500 13px var(--body);color:var(--muted);background:transparent;border:0;padding:7px 12px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
+button:focus-visible,input:focus-visible,select:focus-visible,label.load:focus-within{outline:2px solid var(--tape);outline-offset:2px}
+.seglabel{font-size:13px;color:var(--muted);margin-right:8px}
+.load{display:inline-flex;align-items:center;gap:8px;font:600 13px var(--body);background:var(--ink);color:var(--panel);border-radius:7px;padding:8px 14px;cursor:pointer}
+.load input{position:absolute;width:1px;height:1px;opacity:0}
+
+.empty{background:var(--panel);border:1.5px dashed var(--line);border-radius:12px;padding:36px clamp(16px,4vw,48px);max-width:820px}
+.empty h2{font:700 26px/1.1 var(--display);margin:0 0 10px}
+.empty ol{margin:10px 0 18px;padding-left:20px}
+.empty li{margin:6px 0}
+.empty code{font-size:13px;background:var(--panel2);padding:1px 5px;border-radius:4px}
+.empty.drag{border-color:var(--tape)}
+.err{color:var(--bad);font-weight:500;margin-top:10px}
+
+.kpis{display:grid;grid-template-columns:1fr 1.7fr 1fr 1fr;gap:12px;margin-bottom:12px}
+@media (max-width:1050px){.kpis{grid-template-columns:1fr 1fr}}
+@media (max-width:560px){.kpis{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+.card h2{font:600 15px/1.2 var(--display);margin:0 0 8px;color:var(--muted)}
+.big{font:700 44px/1 var(--display);font-variant-numeric:tabular-nums}
+.big small{font-size:18px;font-weight:600;color:var(--muted);margin-left:4px}
+.note{font-size:13px;color:var(--muted);margin:6px 0 0}
+.rows{margin:10px 0 0;padding:0;list-style:none;font-size:13.5px}
+.rows li{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px dashed var(--line)}
+.rows li span:last-child{font-variant-numeric:tabular-nums;font-weight:500;text-align:right}
+.savings{border-color:var(--ink);border-width:1.5px}
+.savings .head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.savings .big{font-size:52px;color:var(--good)}
+.savings .big.neg{color:var(--bad)}
+.savings .cols{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+@media (max-width:560px){.savings .cols{grid-template-columns:1fr}}
+.savings .cols h3{font:600 14px/1.2 var(--display);margin:10px 0 0;color:var(--ink)}
+.warn{font-size:13px;color:var(--bad);margin:8px 0 0}
+input[type=range]{width:100%;accent-color:var(--tape)}
+.opsrow{display:flex;align-items:center;gap:12px}
+.meter{height:10px;border-radius:5px;background:var(--panel2);border:1px solid var(--line);overflow:hidden;margin-top:10px}
+.meter i{display:block;height:100%;background:var(--rack)}
+.meter i.over{background:var(--bad)}
+
+.main{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;margin-bottom:12px}
+@media (max-width:960px){.main{grid-template-columns:1fr}}
+.mapcard{padding:12px}
+.maphead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.maphead h2{margin:0;font:600 20px/1.1 var(--display);color:var(--ink)}
+.when{color:var(--muted);font-size:13.5px}
+.mapbox{position:relative;width:100%}
+canvas#floor{display:block;width:100%;border-radius:6px;cursor:crosshair}
+.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--ink);border-radius:6px;padding:8px 10px;font-size:12.5px;line-height:1.4;min-width:180px;max-width:260px;box-shadow:0 4px 14px rgba(0,0,0,.18);display:none;z-index:3}
+.tip b{font-family:var(--display);font-size:15px;font-weight:600}
+.legend{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+.legend .ramp{width:160px;height:10px;border-radius:3px;border:1px solid var(--line)}
+.side{display:flex;flex-direction:column;gap:12px}
+.side .card h2{color:var(--ink);font-size:16px}
+.check{display:flex;align-items:center;gap:8px;font-size:13.5px;margin-top:8px}
+.check input{accent-color:var(--tape);width:16px;height:16px}
+.bar{display:grid;grid-template-columns:104px 1fr 62px;align-items:center;gap:8px;font-size:13px;margin:6px 0}
+.bar .track{height:12px;background:var(--panel2);border-radius:3px;overflow:hidden}
+.bar .track i{display:block;height:100%;background:var(--muted)}
+.bar.on .track i{background:var(--rack)}
+.bar span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.bar.on span:first-child{font-weight:600}
+.assume{font-size:13px;margin:0;padding:0;list-style:none}
+.assume li{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px dashed var(--line)}
+.assume li span:last-child{font-variant-numeric:tabular-nums;font-weight:500}
+
+.timeline .tlhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+.datebig{font:700 26px/1 var(--display)}
+#tl{display:block;width:100%;cursor:pointer;touch-action:none}
+.play{font:600 13px var(--body);background:var(--ink);color:var(--panel);border:0;border-radius:7px;padding:7px 14px;cursor:pointer}
+.tlkey{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:4px}
+.tlkey i{display:inline-block;width:10px;height:10px;vertical-align:middle;margin-right:5px;border-radius:1px;background:var(--muted)}
+.tlkey i.m{background:var(--tape)}
+footer{font-size:12.5px;color:var(--muted);margin-top:14px;max-width:90ch}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>RackSmart simulator</h1>
+      <p class="sub" id="subtitle">York DC case-pick replay. Real tours on the real travel network, under each slotting policy.</p>
+    </div>
+    <div id="polWrap" hidden>
+      <span class="seglabel">Floor plan shows</span>
+      <div class="seg" id="polSeg" role="group" aria-label="Policy shown"></div>
+      <p class="note" id="polNote" hidden></p>
+    </div>
+  </header>
+  <div class="tape" aria-hidden="true"></div>
+
+  <section class="empty" id="empty">
+    <h2>Load a replay run</h2>
+    <ol>
+      <li>In the repo, run <code>python scripts/run_sim.py</code>.</li>
+      <li>Open <code>data/processed/sim/&lt;run name&gt;/</code>.</li>
+      <li>Choose <code>layout.json</code> and <code>run.json</code> together, or drop them here.</li>
+    </ol>
+    <label class="load">Choose files<input type="file" id="files" accept=".json,application/json" multiple></label>
+    <p class="note">The files are read in this browser only. Nothing is uploaded or saved.</p>
+    <p class="err" id="err" role="alert"></p>
+  </section>
+
+  <div id="app" hidden>
+  <section class="kpis">
+    <div class="card">
+      <h2>Operators</h2>
+      <div class="opsrow"><div class="big" id="opsBig">—</div><input type="range" id="ops" min="1" max="40" value="10" aria-label="Crew on shift"></div>
+      <ul class="rows">
+        <li><span>Case-pick operators that day</span><span id="opsActual">—</span></li>
+        <li><span>Crew needed, this policy</span><span id="opsNeed">—</span></li>
+        <li><span>Crew needed, baseline</span><span id="opsNeedBase">—</span></li>
+      </ul>
+      <p class="note">Slider sets the crew you're testing. Need = pick hours ÷ <span id="prodH">6.5</span> productive hours.</p>
+    </div>
+
+    <div class="card savings">
+      <div class="head">
+        <h2 id="saveTitle">Pick labor cost</h2>
+        <div class="seg" id="winSeg" role="group" aria-label="Savings window">
+          <button data-v="day" aria-pressed="false">Day</button>
+          <button data-v="week" aria-pressed="false">7 days</button>
+          <button data-v="all" aria-pressed="true">Whole run</button>
+        </div>
+      </div>
+      <div class="big" id="saveBig">—</div>
+      <p class="note" id="saveNote">—</p>
+      <div class="cols">
+        <div>
+          <h3 id="costHead">This policy</h3>
+          <ul class="rows">
+            <li><span>Pick hours</span><span id="cHours">—</span></li>
+            <li><span>Pick labor</span><span id="cLabor">—</span></li>
+            <li><span>Moves, cost</span><span id="cMoves">—</span></li>
+          </ul>
+        </div>
+        <div id="vsCol">
+          <h3>Compared with baseline</h3>
+          <ul class="rows">
+            <li><span>Saved</span><span id="sNet">—</span></li>
+            <li><span>Share of baseline cost</span><span id="sPct">—</span></li>
+            <li><span>Aisle changes avoided</span><span id="sAisle">—</span></li>
+          </ul>
+        </div>
+      </div>
+      <p class="note" id="feetNote">—</p>
+      <p class="warn" id="disagree" hidden>Distance and the time model disagree here: this policy shortens trips but adds aisle changes, which the fitted model says cost more.</p>
+    </div>
+
+    <div class="card">
+      <h2>Day activity</h2>
+      <div class="big" id="linesBig">—<small>picks</small></div>
+      <ul class="rows">
+        <li><span>Tours</span><span id="tours">—</span></li>
+        <li><span>Aisle changes</span><span id="aisles">—</span></li>
+        <li><span>Feet traveled</span><span id="feet">—</span></li>
+        <li><span>Pick hours (fitted)</span><span id="hours">—</span></li>
+      </ul>
+      <div class="meter" aria-hidden="true"><i id="utilBar"></i></div>
+      <p class="note" id="utilNote">—</p>
+    </div>
+
+    <div class="card">
+      <h2>Re-slotting</h2>
+      <div class="big" id="movesBig">—<small>moves</small></div>
+      <p class="note" id="movesNote">—</p>
+      <ul class="rows">
+        <li><span>Moves in this run</span><span id="movesAll">—</span></li>
+        <li><span>Next move day</span><span id="movesNext">—</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="main">
+    <div class="card mapcard">
+      <div class="maphead"><h2 id="mapTitle">Picks by stop</h2><span class="when" id="mapWhen">—</span></div>
+      <div class="mapbox" id="mapbox">
+        <canvas id="floor" role="img" aria-label="York DC floor plan heat map"></canvas>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="legend">
+        <span>Fewer</span><span class="ramp" id="ramp"></span><span id="legHi">More picks</span>
+        <span style="margin-left:12px">Each block is one rack stop (a 103" bay, both faces). Grey blocks have no case-pick face. Hover for detail.</span>
+      </div>
+    </div>
+    <aside class="side">
+      <div class="card">
+        <h2>Map</h2>
+        <div class="seg" id="spanSeg" role="group" aria-label="Map time span">
+          <button data-v="1" aria-pressed="true">Selected day</button>
+          <button data-v="7" aria-pressed="false">Last 7 days</button>
+          <button data-v="0" aria-pressed="false">Whole run</button>
+        </div>
+        <label class="check"><input type="checkbox" id="swapsOn" checked> Show swaps made so far</label>
+        <label class="check"><input type="checkbox" id="golden" checked> Outline the golden zone</label>
+        <label class="check"><input type="checkbox" id="labels" checked> Label aisles</label>
+      </div>
+      <div class="card">
+        <h2>Pick hours this day, by policy</h2>
+        <div id="bars"></div>
+        <p class="note">From the fitted time model: per pick, per case, per aisle change.</p>
+      </div>
+      <div class="card">
+        <h2>Run assumptions</h2>
+        <ul class="assume" id="assume"></ul>
+      </div>
+    </aside>
+  </section>
+
+  <section class="card timeline">
+    <div class="tlhead"><div class="datebig" id="dateBig">—</div><button class="play" id="play">Play</button></div>
+    <svg id="tl" height="110" aria-hidden="true"></svg>
+    <label class="sr" for="day">Date</label>
+    <input type="range" id="day" min="0" max="0" value="0" aria-label="Date">
+    <div class="tlkey"><span><i></i>Case picks per day</span><span><i class="m"></i>Day the shown policy moved product</span></div>
+  </section>
+  <footer id="foot"></footer>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const NAMES={baseline:'Baseline',golden_once:'Golden swap, once',golden_weekly:'Golden swap, weekly',time_swap:'Time-based swap',time_swap_weekly:'Time-based swap, weekly',anticipatory:'Anticipatory (forecast)'};
+const pname=k=>NAMES[k]||k.replace(/_/g,' ');
+const st={pol:null,win:'all',span:1,day:0,ops:10,swaps:true,golden:true,labels:true};
+let L=null,R=null,G=null,SHOWN=[]; // layout, run, geometry, policies shown
+
+// ---------- loading ----------
+async function readFiles(list){
+  $('err').textContent='';
+  let lay=null,run=null;
+  for(const f of list){
+    try{const j=JSON.parse(await f.text());
+      if(j&&Array.isArray(j.stops))lay=j;else if(j&&j.policies&&j.dates)run=j;}
+    catch(e){$('err').textContent=`${f.name} isn't valid JSON.`;return;}
+  }
+  if(!lay||!run){$('err').textContent=!lay&&!run?'Neither file looks like a replay output. Choose layout.json and run.json.':!lay?'Missing layout.json. Choose both files together.':'Missing run.json. Choose both files together.';return;}
+  start(lay,run);
+}
+$('files').addEventListener('change',e=>readFiles([...e.target.files]));
+const drop=$('empty');
+['dragenter','dragover'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('drag');}));
+['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('drag');}));
+drop.addEventListener('drop',e=>readFiles([...e.dataTransfer.files]));
+
+function start(lay,run){
+  L=lay;R=run;
+  // show the baseline plus only the policies that save money over the whole run
+  const all=Object.keys(R.policies),wage=R.cost.wage_per_hour,B=R.policies.baseline;
+  const net=p=>{const d=R.policies[p].daily,s=a=>a.reduce((x,y)=>x+y,0);return B?(s(B.daily.calibrated_hours)-s(d.calibrated_hours))*wage-s(d.move_dollars):0;};
+  const pos=all.filter(p=>p!=='baseline'&&net(p)>0).sort((a,b)=>net(b)-net(a));
+  const pols=(B?['baseline']:[]).concat(pos);SHOWN=pols;
+  const hid=all.filter(p=>p!=='baseline'&&!pos.includes(p));
+  $('polNote').hidden=!hid.length;$('polNote').textContent=hid.length?`Hidden: ${hid.map(pname).join(', ')} (cost more than the baseline over this run).`:'';
+  st.pol=pos[0]||pols[0];
+  st.day=0;
+  const seg=$('polSeg');seg.innerHTML='';
+  pols.forEach(p=>{const b=document.createElement('button');b.dataset.v=p;b.textContent=pname(p);b.setAttribute('aria-pressed',p===st.pol);seg.append(b);});
+  $('polWrap').hidden=false;$('empty').hidden=true;$('app').hidden=false;
+  $('day').max=R.dates.length-1;$('day').value=0;
+  const ppo=R.cost.productive_hours_per_operator||6.5;$('prodH').textContent=ppo;
+  const peak=Math.max(...R.operators,1);$('ops').max=Math.max(20,Math.ceil(peak*1.5));st.ops=peak;$('ops').value=peak;
+  const F=R.mode==='forecast'&&R.forecast;
+  $('subtitle').textContent=F?`York DC forecast: ${fmtD(0,{month:'short',day:'numeric'})} to ${fmtD(R.dates.length-1,{month:'short',day:'numeric',year:'numeric'})}, the 28 days after your forecast's origin (${F.scenario} scenario). Real tours from the 28 days before, scaled per SKU by the forecast.`:`York DC case-pick replay, ${fmtD(0,{month:'short',day:'numeric'})} to ${fmtD(R.dates.length-1,{month:'short',day:'numeric',year:'numeric'})}. Real tours on the real travel network.`;
+  buildGeometry();renderAssumptions();renderFoot();sizeCanvas();renderAll();
+}
+
+// ---------- helpers ----------
+const num=v=>Math.round(v).toLocaleString('en-US');
+const fmt$=v=>(v<0?'−$':'$')+Math.round(Math.abs(v)).toLocaleString('en-US');
+const sgn=v=>(v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{maximumFractionDigits:Math.abs(v)<100?1:0});
+const dateOf=i=>new Date(R.dates[i]+'T12:00:00');
+const fmtD=(i,o)=>dateOf(i).toLocaleDateString('en-US',o||{weekday:'short',month:'short',day:'numeric'});
+const sum=(a,i0,i1)=>{let s=0;for(let i=i0;i<=i1;i++)s+=a[i]||0;return s;};
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+function hex(c){c=c.replace('#','');return[0,2,4].map(k=>parseInt(c.slice(k,k+2),16));}
+let PAL={};
+function readPal(){['--heat0','--heat1','--heat2','--heat3','--empty','--floor','--rack','--tape','--ink','--muted','--line','--panel','--bad','--good'].forEach(k=>PAL[k]=css(k));
+  PAL.stops=['--heat0','--heat1','--heat2','--heat3'].map(k=>hex(PAL[k]));
+  $('ramp').style.background=`linear-gradient(90deg,${PAL['--heat0']},${PAL['--heat1']},${PAL['--heat2']},${PAL['--heat3']})`;}
+function heat(t){t=Math.max(0,Math.min(1,t));const p=[0,.4,.72,1];let k=0;while(k<2&&t>p[k+1])k++;const u=(t-p[k])/(p[k+1]-p[k]),a=PAL.stops[k],b=PAL.stops[k+1];
+  return `rgb(${a.map((v,j)=>Math.round(v+(b[j]-v)*u)).join(',')})`;}
+function bindSeg(id,key,cb){$(id).addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+  $(id).querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b?'true':'false'));
+  st[key]=key==='span'?+b.dataset.v:b.dataset.v;cb();});}
+
+// ---------- cards ----------
+function range(){const d=st.day;return st.win==='day'?[d,d]:st.win==='week'?[Math.max(0,d-6),d]:[0,R.dates.length-1];}
+function renderCards(){
+  const d=st.day,P=R.policies[st.pol].daily,B=R.policies.baseline?R.policies.baseline.daily:P;
+  const wage=R.cost.wage_per_hour,ppo=R.cost.productive_hours_per_operator||6.5;
+  // operators
+  $('opsBig').textContent=st.ops;$('opsActual').textContent=R.operators[d];
+  $('opsNeed').textContent=(P.calibrated_hours[d]/ppo).toFixed(1);
+  $('opsNeedBase').textContent=(B.calibrated_hours[d]/ppo).toFixed(1);
+  // cost: pick labor (fitted time model x wage) + moves; baseline gets its own cost too
+  const [a0,a1]=range(),isBase=st.pol==='baseline';
+  $('saveTitle').textContent=`Pick labor cost, ${pname(st.pol)}`;
+  const hP=sum(P.calibrated_hours,a0,a1),hB=sum(B.calibrated_hours,a0,a1);
+  const mUsd=sum(P.move_dollars,a0,a1),moves=sum(P.moves,a0,a1);
+  const costP=hP*wage+mUsd,costB=hB*wage+sum(B.move_dollars,a0,a1);
+  const saved=costB-costP,ac=sum(B.aisle_changes,a0,a1)-sum(P.aisle_changes,a0,a1);
+  const big=$('saveBig');big.textContent=fmt$(costP);big.classList.remove('neg');big.style.color=isBase?'var(--ink)':'';
+  const wl={day:'on '+fmtD(d),week:'over the 7 days to '+fmtD(d,{month:'short',day:'numeric'}),all:'over the whole run'}[st.win];
+  $('saveNote').textContent=isBase?`what case picking cost ${wl}: fitted pick hours × $${(+wage).toFixed(2)}/h`:`${fmt$(saved)} ${saved>=0?'less':'more'} than the baseline ${wl}, after move cost`;
+  $('cHours').textContent=hP.toFixed(1)+' h';$('cLabor').textContent=fmt$(hP*wage);$('cMoves').textContent=`${num(moves)}, ${fmt$(mUsd)}`;
+  $('vsCol').hidden=isBase;
+  $('sNet').textContent=fmt$(saved);$('sPct').textContent=costB?(100*saved/costB).toFixed(1)+'%':'—';$('sAisle').textContent=sgn(ac);
+  const fP=sum(P.feet,a0,a1),fB=sum(B.feet,a0,a1);
+  $('feetNote').textContent=isBase?`Travel: ${num(fP)} ft, ${num(sum(P.aisle_changes,a0,a1))} aisle changes.`:`Travel: ${num(fP)} ft, ${fB?(100*(fB-fP)/fB).toFixed(1):0}% ${fP<=fB?'less':'more'} than the baseline.`;
+  $('disagree').hidden=isBase||!(fB-fP>0&&hB-hP<0);
+  // day
+  $('linesBig').innerHTML='';$('linesBig').append(num(P.lines[d]));const sm=document.createElement('small');sm.textContent='picks';$('linesBig').append(sm);
+  $('tours').textContent=num(P.tours[d]);$('aisles').textContent=num(P.aisle_changes[d]);$('feet').textContent=num(P.feet[d]);
+  $('hours').textContent=P.calibrated_hours[d].toFixed(1)+' h';
+  const cap=st.ops*ppo,u=cap?P.calibrated_hours[d]/cap:0;
+  const bar=$('utilBar');bar.style.width=Math.min(100,u*100)+'%';bar.classList.toggle('over',u>1);
+  $('utilNote').textContent=P.lines[d]?`${Math.round(u*100)}% of a ${st.ops}-person crew's productive hours`:'No case picks this day.';
+  // moves
+  const mv=$('movesBig');mv.innerHTML='';mv.append(num(P.moves[d]));const s2=document.createElement('small');s2.textContent='moves';mv.append(s2);
+  const sw=R.policies[st.pol].swaps.filter(s=>s.date===R.dates[d]).length;
+  $('movesNote').textContent=isBase?'Baseline never moves product.':P.moves[d]?`${sw} swaps made before the shift, 2 pallet moves each.`:'No moves this day.';
+  $('movesAll').textContent=num(sum(P.moves,0,R.dates.length-1));
+  let nx=-1;for(let k=d+1;k<R.dates.length;k++)if(P.moves[k]){nx=k;break;}$('movesNext').textContent=nx<0?'—':fmtD(nx);
+  // bars
+  const pols=SHOWN,mx=Math.max(...pols.map(p=>R.policies[p].daily.calibrated_hours[d]),.01);
+  const bars=$('bars');bars.innerHTML='';
+  pols.forEach(p=>{const h=R.policies[p].daily.calibrated_hours[d];const row=document.createElement('div');row.className='bar'+(p===st.pol?' on':'');
+    const n=document.createElement('span');n.textContent=pname(p);const t=document.createElement('div');t.className='track';const i=document.createElement('i');i.style.width=(h/mx*100)+'%';t.append(i);
+    const v=document.createElement('span');v.textContent=h.toFixed(1)+' h';row.append(n,t,v);bars.append(row);});
+  $('dateBig').textContent=fmtD(d,{weekday:'long',month:'long',day:'numeric',year:'numeric'})+(R.mode==='forecast'?' (forecast)':'');
+}
+function renderAssumptions(){
+  const c=R.cost,ct=R.calibrated_time,ul=$('assume');ul.innerHTML='';
+  const rows=[['Wage per hour','$'+(+c.wage_per_hour).toFixed(2)],['Travel speed',c.travel_speed_mph+' mph'],['$ per foot',(c.wage_per_hour/c.travel_speed_mph/5280).toFixed(5)],
+    ...(c.cost_per_case!=null?[['Cost per case moved','$'+c.cost_per_case],...(R.move_cost_source==='inventory'?[]:[['Pallet on face when moved',Math.round(c.face_fill*100)+'%'],['Cases per pallet',R.move_cost_source==='cases_per_pallet'?'from extract':c.default_cases_per_pallet+' (default)']])]:[['Cost per pallet move','$'+c.cost_per_move]]),
+    ...(R.start?[['Starting slotting',R.start.slotting==='inventory'?'inventory snapshot':'as picked'],
+      ...(R.start.inventory_file?[['Snapshot',R.start.inventory_file.replace(/\.xlsx$/,'')],['Faces stocked',num(R.start.faces_stocked)]]:[]),
+      ['Move cost counts',R.start.move_cases==='inventory'?'cases on hand':'estimated cases'],
+      ...(R.start.remap?[['Picks kept',`${num(R.start.remap.picks_kept)} of ${num(R.start.remap.picks_on_faces)}`]]:[])]:[]),
+    ...(R.forecast?[['Forecast origin',R.forecast.origin],['Scenario',R.forecast.scenario],['Case picks, last 28 days',num(R.forecast.template_case_picks)],['Case picks, forecast',num(R.forecast.future_case_picks)],['SKUs without a forecast',num(R.forecast.skus_without_forecast)]]:[]),
+    ['Productive h / operator',c.productive_hours_per_operator],
+    ['Per pick',ct.fixed_s+' s'],['Per case',R.has_qty?ct.per_case_s+' s':'not in extract'],['Per aisle change',ct.cross_aisle_s+' s']];
+  rows.forEach(([k,v])=>{const li=document.createElement('li');const a=document.createElement('span'),b=document.createElement('span');a.textContent=k;b.textContent=v;li.append(a,b);ul.append(li);});
+}
+function renderFoot(){const m=R.manifest||{};
+  $('foot').textContent=`Run ${R.name||''}. Commit ${m.git_sha?m.git_sha.slice(0,7):'unknown'}${m.git_dirty?' (uncommitted changes: not citable)':''}, config ${m.config_hash||'unknown'}. `+
+  'Policies come from configs/sim.yaml. Forecasting is not in the replay yet; the anticipatory policy plugs in as another entry under policies.';}
+
+// ---------- floor ----------
+const cv=$('floor'),cx=cv.getContext('2d');let scale=1,cssW=0,cssH=0;
+function buildGeometry(){
+  const xs=L.stops.map(s=>s.x),ys=L.stops.map(s=>s.y),pad=200;
+  G={x0:Math.min(...xs)-pad,x1:Math.max(...xs)+pad,y0:Math.min(...ys)-pad,y1:Math.max(...ys)+pad};
+  G.idx={};L.stops.forEach((s,i)=>G.idx[s.id]=i);
+  G.rack=L.stops.filter(s=>s.type==='rack');
+  // aisle labels: topmost rack stop per aisle
+  const top={};G.rack.forEach(s=>{if(!s.aisle)return;if(!top[s.aisle]||s.y>top[s.aisle].y)top[s.aisle]=s;});G.labels=Object.entries(top);
+  // aisle line segments between consecutive rack stops at the same x
+  const byX={};G.rack.forEach(s=>{const k=Math.round(s.x);(byX[k]=byX[k]||[]).push(s);});
+  G.segs=[];Object.values(byX).forEach(a=>{a.sort((p,q)=>p.y-q.y);for(let i=1;i<a.length;i++)if(a[i].y-a[i-1].y<140)G.segs.push([a[i-1],a[i]]);});
+}
+const W2C=(x,y)=>[(x-G.x0)*scale,(G.y1-y)*scale];
+function sizeCanvas(){if(!G)return;const w=$('mapbox').clientWidth;cssW=w;scale=w/(G.x1-G.x0);cssH=Math.round((G.y1-G.y0)*scale);
+  const dpr=window.devicePixelRatio||1;cv.width=Math.round(w*dpr);cv.height=Math.round(cssH*dpr);cv.style.height=cssH+'px';cx.setTransform(dpr,0,0,dpr,0,0);}
+let visits={},vmax=1;
+function computeVisits(){
+  const d=st.day,d0=st.span===0?0:Math.max(0,d-st.span+1),d1=st.span===0?R.dates.length-1:d;
+  visits={};vmax=1;
+  for(const p of Object.keys(R.policies)){const acc={};for(let k=d0;k<=d1;k++){const v=R.policies[p].stop_visits[k];for(const s in v)acc[s]=(acc[s]||0)+v[s];}
+    if(p===st.pol)visits=acc;for(const s in acc)if(acc[s]>vmax)vmax=acc[s];}
+}
+function draw(){
+  if(!G)return;const c=cx;c.clearRect(0,0,cssW,cssH);c.fillStyle=PAL['--floor'];c.fillRect(0,0,cssW,cssH);
+  c.strokeStyle=PAL['--line'];c.lineWidth=Math.max(1,scale*30);c.lineCap='round';
+  G.segs.forEach(([a,b])=>{const [x1,y1]=W2C(a.x,a.y),[x2,y2]=W2C(b.x,b.y);c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();});
+  const w=Math.max(3,150*scale),h=Math.max(2,92*scale);
+  G.rack.forEach(s=>{const [x,y]=W2C(s.x,s.y);
+    if(!s.faces){c.fillStyle=PAL['--empty'];c.fillRect(x-w/2,y-h/2,w,h);return;}
+    const v=visits[s.id]||0;c.fillStyle=v?heat(.08+.92*Math.sqrt(v/vmax)):PAL['--heat0'];c.fillRect(x-w/2,y-h/2,w,h);
+    if(st.golden&&s.golden){c.strokeStyle=PAL['--tape'];c.lineWidth=Math.max(1.2,scale*14);c.strokeRect(x-w/2,y-h/2,w,h);}});
+  // dock, lanes, lines
+  L.stops.forEach(s=>{if(s.type==='rack'||s.type==='junction')return;const [x,y]=W2C(s.x,s.y);
+    c.fillStyle=s.type==='dispatch'?PAL['--bad']:s.type==='line'?PAL['--rack']:PAL['--tape'];const r=s.type==='dispatch'?5:3;c.fillRect(x-r,y-r,2*r,2*r);});
+  c.font=`600 ${Math.max(10,Math.min(13,scale*120))}px ${css('--display')}`;c.textAlign='left';c.textBaseline='middle';c.fillStyle=PAL['--ink'];
+  {const s=L.stops[G.idx[L.dock]];if(s){const [x,y]=W2C(s.x,s.y);c.fillText('Dispatch',x+8,y);}}
+  L.stops.forEach(s=>{if(s.type==='line'&&s.label&&/^L\d/.test(s.label)){const [x,y]=W2C(s.x,s.y);c.fillStyle=PAL['--rack'];c.fillText(s.label,x+6,y);}});
+  if(st.labels){c.fillStyle=PAL['--muted'];c.textAlign='center';c.textBaseline='bottom';
+    G.labels.forEach(([a,s])=>{const [x,y]=W2C(s.x,s.y);c.fillText(a,x,y-h/2-2);});}
+  // swaps so far
+  if(st.swaps&&st.pol!=='baseline'){const day=R.dates[st.day];const sw=R.policies[st.pol].swaps.filter(s=>s.date<=day);
+    c.strokeStyle=PAL['--ink'];c.fillStyle=PAL['--ink'];c.lineWidth=1.1;c.globalAlpha=.6;
+    sw.slice(-300).forEach(s=>{const a=L.stops[G.idx[s.from_stop]],b=L.stops[G.idx[s.to_stop]];if(!a||!b)return;
+      const [ax,ay]=W2C(a.x,a.y),[bx,by]=W2C(b.x,b.y);c.beginPath();c.moveTo(ax,ay);c.lineTo(bx,by);c.stroke();
+      const g=Math.atan2(by-ay,bx-ax),k=6;c.beginPath();c.moveTo(bx,by);c.lineTo(bx-k*Math.cos(g-.45),by-k*Math.sin(g-.45));c.lineTo(bx-k*Math.cos(g+.45),by-k*Math.sin(g+.45));c.closePath();c.fill();});
+    c.globalAlpha=1;}
+}
+function renderMap(){computeVisits();
+  $('mapTitle').textContent=`Picks by stop, ${pname(st.pol)}`;
+  $('mapWhen').textContent=st.span===1?fmtD(st.day,{weekday:'long',month:'short',day:'numeric'}):st.span===7?`7 days to ${fmtD(st.day,{month:'short',day:'numeric'})}`:'Whole run';
+  draw();}
+
+// tooltip
+const tip=$('tip');
+cv.addEventListener('mousemove',e=>{if(!G)return;const rc=cv.getBoundingClientRect(),mx=e.clientX-rc.left,my=e.clientY-rc.top;
+  const wx=mx/scale+G.x0,wy=G.y1-my/scale;let hit=null,best=1e9;
+  G.rack.forEach(s=>{const dx=Math.abs(s.x-wx),dy=Math.abs(s.y-wy);if(dx<90&&dy<55&&dx+dy<best){best=dx+dy;hit=s;}});
+  if(!hit){tip.style.display='none';return;}
+  tip.innerHTML='';const b=document.createElement('b');b.textContent=hit.aisle?`Aisle ${hit.aisle}`:'Rack stop';tip.append(b);
+  const lines=[hit.faces?`${hit.faces} case-pick face${hit.faces>1?'s':''}`:'No case-pick face',
+    hit.faces?`${num(visits[hit.id]||0)} picks, ${st.span===1?'this day':st.span===7?'last 7 days':'whole run'}`:null,
+    hit.ft_from_dock!=null?`${num(hit.ft_from_dock)} ft from dispatch`:null, hit.golden?'In the golden zone':null].filter(Boolean);
+  lines.forEach(t=>{const d=document.createElement('div');d.textContent=t;tip.append(d);});
+  tip.style.display='block';const tw=tip.offsetWidth,th=tip.offsetHeight;let x=mx+14,y=my+14;if(x+tw>cssW)x=mx-tw-14;if(y+th>cssH)y=Math.max(0,my-th-14);tip.style.left=Math.max(0,x)+'px';tip.style.top=y+'px';});
+cv.addEventListener('mouseleave',()=>tip.style.display='none');
+
+// ---------- timeline ----------
+const svg=$('tl'),NS='http://www.w3.org/2000/svg';let tlW=0;const TLH=110,PL=8,PR=8,TOP=8,BOT=22;
+function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);svg.append(e);return e;}
+const n=()=>R.dates.length,bw=()=>(tlW-PL-PR)/n(),tx=i=>PL+i*bw();
+function drawTL(){tlW=svg.clientWidth||800;svg.setAttribute('viewBox',`0 0 ${tlW} ${TLH}`);svg.innerHTML='';
+  const lines=R.policies[st.pol].daily.lines,mv=R.policies[st.pol].daily.moves,mx=Math.max(...lines,1),hgt=TLH-TOP-BOT;
+  for(let i=0;i<n();i++){const h=lines[i]/mx*hgt;el('rect',{x:tx(i)+bw()*.12,y:TOP+hgt-h,width:Math.max(1,bw()*.76),height:h,fill:i===st.day?PAL['--bad']:PAL['--muted'],opacity:i===st.day?1:.55});
+    if(mv[i])el('rect',{x:tx(i)+bw()*.2,y:TLH-BOT+3,width:Math.max(2,bw()*.6),height:5,fill:PAL['--tape']});}
+  const step=Math.max(1,Math.ceil(n()/10));
+  for(let i=0;i<n();i+=step){const t=el('text',{x:tx(i)+2,y:TLH-3,fill:PAL['--muted'],'font-size':11,'font-family':css('--body')});t.textContent=fmtD(i,{month:'short',day:'numeric'});}
+}
+function dayFromX(cxp){const r=svg.getBoundingClientRect();return Math.max(0,Math.min(n()-1,Math.floor((cxp-r.left-PL)/bw())));}
+let drag=false;
+svg.addEventListener('pointerdown',e=>{if(!R)return;drag=true;svg.setPointerCapture(e.pointerId);setDay(dayFromX(e.clientX));});
+svg.addEventListener('pointermove',e=>{if(drag)setDay(dayFromX(e.clientX));});
+svg.addEventListener('pointerup',()=>drag=false);
+function setDay(d){if(d===st.day)return;st.day=d;$('day').value=d;renderDay();}
+function renderDay(){renderCards();renderMap();drawTL();}
+function renderAll(){readPal();renderDay();}
+let playT=null;
+$('play').addEventListener('click',()=>{if(playT){clearInterval(playT);playT=null;$('play').textContent='Play';return;}
+  $('play').textContent='Pause';if(st.day>=n()-1)setDay(0);playT=setInterval(()=>{if(st.day>=n()-1){clearInterval(playT);playT=null;$('play').textContent='Play';return;}setDay(st.day+1);},500);});
+$('day').addEventListener('input',e=>setDay(+e.target.value));
+$('ops').addEventListener('input',e=>{st.ops=+e.target.value;renderCards();});
+$('swapsOn').addEventListener('change',e=>{st.swaps=e.target.checked;draw();});
+$('golden').addEventListener('change',e=>{st.golden=e.target.checked;draw();});
+$('labels').addEventListener('change',e=>{st.labels=e.target.checked;draw();});
+bindSeg('polSeg','pol',renderDay);bindSeg('winSeg','win',renderCards);bindSeg('spanSeg','span',renderMap);
+new ResizeObserver(()=>{if(!R)return;sizeCanvas();draw();drawTL();}).observe($('mapbox'));
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(R){readPal();draw();drawTL();}});
+readPal();
+</script>
+</body>
+</html>
